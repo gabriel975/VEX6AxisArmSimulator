@@ -6,6 +6,7 @@
 // extension); the result is one triangle soup in mm, centred on (0, 0) with its
 // lowest point at z = 0 (v4 place_on_floor).
 import { parseModelBytes, extOf, MODEL_EXTS } from "./file_formats.js";
+import * as bodies from "./bodies.js";
 
 export { MODEL_EXTS };
 export const MAX_SIZE = 400;          // mm - bigger models are scaled down (v4)
@@ -40,7 +41,10 @@ export class ModelItem {
     this.userScale = scale;
     this.positions = positions;
     this.color = PALETTE[0];
-    this.offset = [0, 0, 0];
+    this.offset = [0, 0, 0];         // world position of the local origin (bottom centre), mm
+    this.yaw = 0;                    // rotation about Z, degrees
+    this.magnetic = true;            // the magnet can pick it up
+    this.held = false;               // currently carried by the magnet
     this.autoScale = 1;              // what placeOnFloor did on top of userScale
     this.notes = [...notes];         // human readable: unit conversions, auto scaling
     this.placeOnFloor();
@@ -73,8 +77,9 @@ export class ModelItem {
   }
   bounds() { return [this.lo, this.hi]; }
   size() { return [0, 1, 2].map((k) => this.hi[k] - this.lo[k]); }
-  halfSize() { return [Math.max(Math.abs(this.lo[0]), Math.abs(this.hi[0])), Math.max(Math.abs(this.lo[1]), Math.abs(this.hi[1]))]; }
-  worldBounds() { return [this.lo.map((v, k) => v + this.offset[k]), this.hi.map((v, k) => v + this.offset[k])]; }
+  halfSize() { return bodies.halfSize(this); }
+  worldBounds() { return bodies.aabb(this); }
+  top() { return bodies.topZ(this); }
 }
 
 // -------------------------------------------------------------- storage ---
@@ -115,7 +120,7 @@ export class ModelLibrary {
       this.bundled = r.ok ? (await r.json()).models || [] : [];
     } catch { this.bundled = []; }
     try {
-      this.stored = (await tx("readonly", (st) => st.getAll())).map(({ key, name, fmt, size, added }) => ({ key, name, fmt, size, added }));
+      this.stored = (await tx("readonly", (st) => st.getAll())).map(({ key, name, fmt, size, added, magnetic }) => ({ key, name, fmt, size, added, magnetic: magnetic !== false }));
       this.stored.sort((a, b) => a.name.localeCompare(b.name));
     } catch { this.stored = []; }
     return this;
@@ -131,10 +136,26 @@ export class ModelLibrary {
       if (sameBytes(old.data, buffer)) return key;
       key = `${stem}_${n++}${e}`;
     }
-    await tx("readwrite", (st) => st.put({ key, name: key, fmt: e.slice(1).toUpperCase(), size: buffer.byteLength, added: Date.now(), data: buffer }));
+    await tx("readwrite", (st) => st.put({ key, name: key, fmt: e.slice(1).toUpperCase(), size: buffer.byteLength, added: Date.now(), data: buffer, magnetic: true }));
     return key;
   }
   async removeStored(key) { await tx("readwrite", (st) => st.delete(key)); }
+  /** Remember whether the magnet can pick up a stored model (used as the default when it is added again). */
+  async setStoredMagnetic(key, on) {
+    const rec = await tx("readonly", (st) => st.get(key));
+    if (!rec) return false;
+    rec.magnetic = !!on;
+    await tx("readwrite", (st) => st.put(rec));
+    const s = this.stored.find((x) => x.key === key);
+    if (s) s.magnetic = !!on;
+    return true;
+  }
+  /** Default "magnetic" flag for a source: stored record, models/index.json entry, else true. */
+  defaultMagnetic(source) {
+    if (source.stored) { const s = this.stored.find((x) => x.key === source.stored); return s ? s.magnetic !== false : true; }
+    if (source.library) { const b = this.bundled.find((x) => "models/" + x.file === source.library); return b ? b.magnetic !== false : true; }
+    return true;
+  }
   async getStored(key) { const r = await tx("readonly", (st) => st.get(key)); return r ? r.data : null; }
 
   /** Bytes of a bundled file (models/x.stl) or a stored one. */
@@ -161,7 +182,9 @@ export class ModelLibrary {
     const buf = await this.bytes(source);
     const r = parseModelBytes(buf, name);
     if (!r.positions.length) throw new Error("the file has no triangles");
-    return new ModelItem(name, ext(name).slice(1).toUpperCase() || r.fmt, r.positions, source, scale, r.notes);
+    const m = new ModelItem(name, ext(name).slice(1).toUpperCase() || r.fmt, r.positions, source, scale, r.notes);
+    m.magnetic = this.defaultMagnetic(source);
+    return m;
   }
 }
 

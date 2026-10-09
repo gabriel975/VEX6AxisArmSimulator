@@ -14,6 +14,19 @@ export const C_BASE = [0.18, 0.19, 0.22];
 export const C_TOOL = [0.55, 0.57, 0.6];
 const RED = [0.93, 0.2, 0.2];
 const BG = [0.93, 0.95, 0.98];
+export const GIZMO_COLORS = { x: [0.85, 0.15, 0.15], y: [0.1, 0.62, 0.2], z: [0.15, 0.35, 0.92] };
+
+/** Shortest distance between a ray and a segment p0-p1 (THREE.Vector3). */
+function raySegmentDistance(ray, p0, p1) {
+  const d1 = ray.direction, d2 = p1.clone().sub(p0), r = ray.origin.clone().sub(p0);
+  const a = 1, e = d2.dot(d2), f = d2.dot(r), c = d1.dot(r), b = d1.dot(d2);
+  const den = a * e - b * b;
+  let s = den > 1e-9 ? (b * f - c * e) / den : 0;
+  let t = (b * s + f) / e;
+  if (t < 0) { t = 0; s = -c; } else if (t > 1) { t = 1; s = b - c; }
+  s = Math.max(0, s);
+  return ray.origin.clone().addScaledVector(d1, s).distanceTo(p0.clone().addScaledVector(d2, t));
+}
 
 const v3 = (a) => new THREE.Vector3(a[0], a[1], a[2]);
 const colorOf = (c) => new THREE.Color().setRGB(c[0], c[1], c[2], THREE.SRGBColorSpace);
@@ -371,6 +384,7 @@ export class Renderer {
       if (!m.parent) this.scene.add(m);
       m.material.color.copy(colorOf(Renderer.tint(md.color, md === highlight)));
       m.position.set(...md.offset);
+      m.rotation.z = (md.yaw || 0) * Math.PI / 180;
     }
     // meshes of removed models are kept (hidden) so undo can bring them back
     for (const [md, m] of this.modelMeshes) if (!seen.has(md) && m.parent) this.scene.remove(m);
@@ -410,6 +424,63 @@ export class Renderer {
     this.ghost.add(this.ghostBox, this.ghostEdge);
     this.ghost.visible = false;
     this.scene.add(this.ghost);
+    // move gizmo: three arrows (X red, Y green, Z blue), drawn on top of everything
+    this.gizmo = new THREE.Group();
+    this.gizmo.visible = false;
+    this.gizmo.renderOrder = 20;
+    this.gizmoArrows = {};
+    const CONE = new THREE.ConeGeometry(1, 1, 16).rotateX(Math.PI / 2).translate(0, 0, 0.5);
+    for (const [axis, dir, col] of [["x", [1, 0, 0], GIZMO_COLORS.x], ["y", [0, 1, 0], GIZMO_COLORS.y], ["z", [0, 0, 1], GIZMO_COLORS.z]]) {
+      const mat = new THREE.MeshBasicMaterial({ color: colorOf(col), depthTest: false, transparent: true, opacity: 0.95 });
+      const shaft = new THREE.Mesh(CYL, mat), head = new THREE.Mesh(CONE, mat);
+      shaft.renderOrder = head.renderOrder = 20;
+      const q = new THREE.Quaternion().setFromUnitVectors(Z, v3(dir));
+      shaft.quaternion.copy(q); head.quaternion.copy(q);
+      this.gizmo.add(shaft, head);
+      this.gizmoArrows[axis] = { shaft, head, dir, mat, col };
+    }
+    this.scene.add(this.gizmo);
+  }
+
+  /** Show the move gizmo at a world point; `active` highlights the axis being dragged. */
+  setGizmo(center, active = null) {
+    if (!center) { this.gizmo.visible = false; this._gizmo = null; return; }
+    const s = this.camera.position.distanceTo(v3(center)) / 800;      // constant size on screen
+    const len = 48 * s, head = 13 * s, shaftR = 1.5 * s, headR = 4.5 * s;
+    this.gizmo.position.set(...center);
+    for (const [axis, a] of Object.entries(this.gizmoArrows)) {
+      const d = v3(a.dir);
+      a.shaft.position.copy(d.clone().multiplyScalar(6 * s));
+      a.shaft.scale.set(shaftR, shaftR, len - head);
+      a.head.position.copy(d.clone().multiplyScalar(6 * s + len - head));
+      a.head.scale.set(headR, headR, head);
+      a.mat.color.copy(colorOf(active === axis ? C_SELECTED : a.col));
+      a.mat.opacity = active && active !== axis ? 0.35 : 0.95;
+    }
+    this.gizmo.visible = true;
+    this._gizmo = { center: [...center], s, len: 6 * s + len, r: 7 * s };
+  }
+  /** Which gizmo arrow (if any) a mouse ray touches: "x" | "y" | "z" | null */
+  pickGizmo(mx, my) {
+    const g = this._gizmo;
+    if (!g || !this.gizmo.visible) return null;
+    const ray = this.ray(mx, my);
+    let best = null, bd = Infinity;
+    for (const [axis, a] of Object.entries(this.gizmoArrows)) {
+      const p0 = new THREE.Vector3(...g.center), p1 = p0.clone().add(v3(a.dir).multiplyScalar(g.len));
+      const d = raySegmentDistance(ray, p0, p1);
+      if (d < g.r && d < bd) { best = axis; bd = d; }
+    }
+    return best;
+  }
+  /** Parameter t along the axis line (center + t * dir) closest to the mouse ray. */
+  axisParam(mx, my, center, dir) {
+    const ray = this.ray(mx, my);
+    const c = v3(center), d = v3(dir).normalize();
+    const w = c.clone().sub(ray.origin), e = ray.direction;
+    const b = d.dot(e), dw = d.dot(w), ew = e.dot(w), den = 1 - b * b;
+    if (Math.abs(den) < 1e-6) return 0;
+    return (b * ew - dw) / den;
   }
 
   setSelection(lo, hi, color) {

@@ -444,6 +444,225 @@ await check("3MF import survives a scene save / load round trip (embedded) and t
   return "ok";
 });
 
+// --------------------------------------------------------------- moving objects, stacking, magnet
+const findBody = (n) => `[...app.c.objects, ...app.models].find((o) => o.name === ${JSON.stringify(n)})`;
+const selectBody = (n) => page.evaluate(`app.selectedObject = ${findBody(n)}; app.syncPanel(true);`);
+const posOf = (n) => page.evaluate(`(() => { const o = ${findBody(n)}; return (o.offset || o.pos).map((v) => Math.round(v * 10) / 10); })()`);
+const canvasBox = () => page.locator("#c3d").boundingBox();
+/** Drag the selected object's gizmo arrow by `mm` along `axis` with the mouse. */
+const gizmoDrag = async (axis, mm) => {
+  const box = await canvasBox();
+  const g = await page.evaluate(([axis, mm]) => {
+    const c = app.gizmoCenter(app.selectedObject), s = app.renderer._gizmo.s, d = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[axis];
+    const at = (k) => [c[0] + d[0] * k, c[1] + d[1] * k, c[2] + d[2] * k];
+    return { a: app.renderer.project(at(30 * s)), b: app.renderer.project(at(30 * s + mm)) };
+  }, [axis, mm]);
+  await page.mouse.move(box.x + g.a[0], box.y + g.a[1]);
+  await page.waitForTimeout(60);
+  const hover = await page.evaluate(() => app.hoverAxis);
+  await page.mouse.down();
+  await page.mouse.move(box.x + g.b[0], box.y + g.b[1], { steps: 8 });
+  await page.mouse.up();
+  return hover;
+};
+const go = async (t) => {
+  await page.keyboard.press("t"); await page.locator("#prompt-input").fill(t); await page.keyboard.press("Enter");
+  await waitArm(page); await page.waitForTimeout(250);
+  return page.evaluate(() => ({ pos: app.c.position().map(Math.round), hits: app.hits.map((h) => h.join(" > ")), toast: app.lastToast }));
+};
+
+await check("select an object: move gizmo + position editor; drag the Z and X arrows", async () => {
+  await page.evaluate(() => { app.addBuiltin("cube", [150, 50]); app.addBuiltin("cube", [150, 150]); });
+  await selectBody("Cube 3");
+  await page.evaluate(() => { if (app.snapToSurface) app.doAction("snap"); });            // free Z for this check
+  await page.waitForFunction(() => app.renderer.gizmo.visible, null, { timeout: 5000 });   // drawn on the next frame
+  const ui = await page.evaluate(() => ({ panel: !document.querySelector("#sel-panel").hidden, name: document.querySelector("#sel-name").textContent,
+    x: document.querySelector("#sel-x").value, y: document.querySelector("#sel-y").value, z: document.querySelector("#sel-z").value, gizmo: app.renderer.gizmo.visible, snap: app.snapToSurface }));
+  assert(ui.panel && ui.name === "Cube 3" && ui.x === "150" && ui.y === "50" && ui.z === "0" && ui.gizmo && !ui.snap, JSON.stringify(ui));
+  const hz = await gizmoDrag("z", 40);
+  let p = await posOf("Cube 3");
+  assert(hz === "z" && Math.abs(p[2] - 40) < 1.5 && p[0] === 150 && p[1] === 50, `after Z drag ${p} (hover ${hz})`);
+  const hx = await gizmoDrag("x", 40);
+  p = await posOf("Cube 3");
+  assert(hx === "x" && Math.abs(p[0] - 190) < 1.5 && Math.abs(p[2] - 40) < 1.5, `after X drag ${p}`);
+  assert(/^Cube 3 moved to \(190, 50, 40\)/.test(await page.evaluate(() => app.lastToast)), await page.evaluate(() => app.lastToast));
+  await shot(page, "17_move_gizmo.png");
+  return `Z arrow -> z ${p[2]}, X arrow -> x ${p[0]}`;
+});
+
+await check("numeric editor, −/+ steppers with step sizes, keyboard nudges; never below the Tile", async () => {
+  await page.locator('#step-seg [data-arg="5"]').click();
+  await page.locator('#sel-panel [data-arg="y,1"]').click();
+  let p = await posOf("Cube 3");
+  assert(p.join(",") === "190,55,40", "stepper +Y by 5: " + p);
+  await page.locator('#step-seg [data-arg="50"]').click();
+  await page.locator('#sel-panel [data-arg="x,-1"]').click();
+  p = await posOf("Cube 3");
+  assert(p.join(",") === "140,55,40", "stepper -X by 50: " + p);
+  await page.locator("#sel-z").fill("-30"); await page.keyboard.press("Enter");
+  p = await posOf("Cube 3");
+  assert(p.join(",") === "140,55,0", "typed Z = -30 is clamped to the Tile: " + p);
+  await page.locator("#c3d").click({ position: { x: 40, y: 400 } });        // keyboard focus back on the page (keeps the selection)
+  await selectBody("Cube 3");
+  await page.keyboard.press("PageUp"); await page.keyboard.press("PageUp");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Shift+ArrowDown");
+  p = await posOf("Cube 3");
+  assert(p.join(",") === "140,105,50", "PageUp x2 (+100), Right (+50 Y), Shift+Down (-50 Z): " + p);
+  await page.locator('#step-seg [data-arg="10"]').click();
+  await page.keyboard.press("ArrowUp"); await page.keyboard.press("ArrowLeft");
+  p = await posOf("Cube 3");
+  assert(p.join(",") === "150,95,50", "Up / Left by 10: " + p);
+  await shot(page, "18_position_editor.png");
+  return `(${p}) via steppers, typing and keys`;
+});
+
+await check("snap to surface: stacking on another cube, falling off, Drop; block / warn overlaps", async () => {
+  await page.locator("#sw-snap").click();
+  assert(await page.evaluate(() => app.snapToSurface), "snap not on");
+  await page.locator("#btn-drop").click();
+  let p = await posOf("Cube 3");
+  assert(p.join(",") === "150,95,0", "Drop: " + p);
+  await page.locator("#sel-y").fill("150"); await page.keyboard.press("Enter");           // onto Cube 4 at (150, 150)
+  p = await posOf("Cube 3");
+  assert(p.join(",") === "150,150,25", "climbs onto Cube 4: " + p);
+  await page.locator('#sel-panel [data-arg="y,1"]').click();                              // still mostly on top
+  p = await posOf("Cube 3");
+  assert(p.join(",") === "150,160,25", "nudged on top: " + p);
+  await page.locator("#sel-y").fill("200"); await page.keyboard.press("Enter");
+  p = await posOf("Cube 3");
+  assert(p.join(",") === "150,200,0", "off the edge: falls to the Tile: " + p);
+  // overlaps: with snap off, moving into Cube 4 is refused; with Block off it is allowed with a warning
+  await page.locator("#sw-snap").click();
+  await page.locator("#sel-y").fill("160"); await page.keyboard.press("Enter");
+  p = await posOf("Cube 3");
+  const t1 = await page.evaluate(() => app.lastToast);
+  assert(p.join(",") === "150,200,0" && /Can't move Cube 3 there - it would overlap Cube 4/.test(t1), `${p} ${t1}`);
+  await page.locator("#sw-block").click();
+  await page.locator("#sel-y").fill("160"); await page.keyboard.press("Enter");
+  p = await posOf("Cube 3");
+  const t2 = await page.evaluate(() => app.lastToast);
+  assert(p.join(",") === "150,160,0" && /Cube 3 at \(150, 160, 0\) - overlaps Cube 4/.test(t2), `${p} ${t2}`);
+  await page.locator("#sw-block").click();
+  await page.locator("#sel-y").fill("50"); await page.keyboard.press("Enter");
+  await page.locator("#sw-snap").click();
+  const st = await page.evaluate(() => ({ snap: app.snapToSurface, block: app.blockOverlaps, p: app.c.objects.map((o) => o.name + "@" + o.pos) }));
+  assert(st.snap && st.block, JSON.stringify(st));
+  return `stacked at z 25, dropped to 0; blocked: "${t1}"; warned: "${t2}"`;
+});
+
+await check("undo / redo cover nudges (coalesced), gizmo moves and model rotation", async () => {
+  await selectBody("Cube 3");
+  const n0 = await page.evaluate(() => app.history.undoStack.length);
+  await page.locator("#c3d").click({ position: { x: 40, y: 400 } });
+  await selectBody("Cube 3");
+  for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowUp");
+  let p = await posOf("Cube 3");
+  const n1 = await page.evaluate(() => app.history.undoStack.length);
+  assert(p[0] === 180 && n1 === n0 + 1, `3 quick nudges = one undo step: x ${p[0]}, stack ${n0} -> ${n1}`);
+  await page.keyboard.press("Control+z");
+  p = await posOf("Cube 3");
+  assert(p[0] === 150, "undo nudges: " + p);
+  await page.keyboard.press("Control+y");
+  p = await posOf("Cube 3");
+  assert(p[0] === 180, "redo nudges: " + p);
+  await page.keyboard.press("Control+z");
+  await selectBody("bambu_plate.3mf");
+  await page.keyboard.press(".");
+  await page.locator("#btn-rot-r").click();
+  await page.keyboard.press(",");
+  const y1 = await page.evaluate(() => app.models.find((m) => m.name === "bambu_plate.3mf").yaw);
+  assert(y1 === 15, "yaw after . + button + , : " + y1);
+  await page.waitForTimeout(1300);                                   // past the coalescing window
+  await page.keyboard.press(".");
+  await page.keyboard.press("Control+z");
+  const y2 = await page.evaluate(() => app.models.find((m) => m.name === "bambu_plate.3mf").yaw);
+  assert(y2 === 15, "undo the last turn: " + y2);
+  const label = await page.evaluate(() => app.lastToast);
+  assert(/Undo: Turn bambu_plate/.test(label), label);
+  const yawUI = await page.evaluate(() => document.querySelector("#sel-yaw").textContent);
+  assert(yawUI === "15°", "yaw shown " + yawUI);
+  await page.evaluate(() => { app.selectedObject = null; app.syncPanel(true); });
+  return `x 150 -> 180 -> 150 -> 180 -> 150; yaw 15° (${label})`;
+});
+
+await check("mesh collision: the tool fits in the pallet's slot but stops at its rail", async () => {
+  await page.evaluate(async () => { await app.addModel({ library: "models/test_pallet.3mf" }, "test_pallet.3mf", { pos: [60, 120] }); });
+  const pal = await page.evaluate(() => { const m = app.models.find((x) => x.name === "test_pallet.3mf"); return { off: m.offset, b: m.worldBounds() }; });
+  assert(pal.off.join(",") === "60,120,0", JSON.stringify(pal));
+  const slot = await go("60, 120, 9");                       // 3 mm above the 6 mm slot floor, inside the 14 mm box
+  assert(/Reached \(60, 120, 9\)/.test(slot.toast) && slot.hits.length === 0, JSON.stringify(slot));
+  const rail = await go("60, 98, 9");                        // into the rail
+  assert(/Stopped before a collision: tool hits test_pallet.3mf/.test(rail.toast), JSON.stringify(rail));
+  await go("60, 98, 40");
+  return `slot: "${slot.toast}"; rail: "${rail.toast}"`;
+});
+
+await check("magnet picks up a 3MF and an STL from their surfaces, carries them rigidly, releases onto what is below", async () => {
+  await page.evaluate(() => { app.c.objects.find((o) => o.name === "Cube 3").pos = [220, 60, 0]; });   // clear the landing area
+  // the pallet (3MF): grab it 1 mm above a rail
+  const g1 = await go("60, 98, 15");
+  await page.keyboard.press("g");
+  let held = await page.evaluate(() => ({ held: app.c.held?.body?.name, flag: app.models.find((m) => m.name === "test_pallet.3mf").held, toast: app.lastToast }));
+  assert(held.held === "test_pallet.3mf" && held.flag && /Picked up test_pallet/.test(held.toast), JSON.stringify({ g1, held }));
+  await go("100, 60, 90");
+  const carried = await page.evaluate(() => { const m = app.models.find((x) => x.name === "test_pallet.3mf"); const tip = app.c.position(); return { dz: Math.round(tip[2] - m.offset[2]), held: m.held, row: document.querySelector('#scene-list .obj[data-name="test_pallet.3mf"] .st')?.textContent }; });
+  assert(carried.dz === 15 && carried.held && carried.row === "held", JSON.stringify(carried));
+  await shot(page, "19_magnet_carrying_model.png");
+  await page.keyboard.press("g");
+  let pal = await page.evaluate(() => { const m = app.models.find((x) => x.name === "test_pallet.3mf"); return { z: m.offset[2], held: m.held, toast: app.lastToast }; });
+  assert(pal.z === 0 && !pal.held && /Dropped test_pallet/.test(pal.toast), JSON.stringify(pal));
+  // the STL cylinder (40 x 60): grab its top centre, release it over Cube 4 -> rests on the cube
+  const part = await posOf("my_part.stl");
+  await go(`${part[0]}, ${part[1]}, 61`);
+  await page.keyboard.press("g");
+  held = await page.evaluate(() => app.c.held?.body?.name);
+  assert(held === "my_part.stl", "held " + held);
+  await go("150, 150, 110");
+  await page.keyboard.press("g");
+  let cyl = await page.evaluate(() => { const m = app.models.find((x) => x.name === "my_part.stl"); return { off: m.offset.map(Math.round), toast: app.lastToast }; });
+  assert(cyl.off[2] === 25 && Math.abs(cyl.off[0] - 150) < 2 && Math.abs(cyl.off[1] - 150) < 2, "settled on Cube 4: " + JSON.stringify(cyl));
+  // Magnetic off: the magnet ignores it
+  await page.locator('#scene-list .obj[data-name="my_part.stl"] .mag').click();
+  await go("150, 150, 86");
+  await page.keyboard.press("g");
+  const ign = await page.evaluate(() => ({ held: app.c.held, mag: app.models.find((x) => x.name === "my_part.stl").magnetic, on: app.c.magnetOn }));
+  assert(ign.held === null && ign.mag === false && ign.on, JSON.stringify(ign));
+  await page.keyboard.press("g");
+  await page.locator('#scene-list .obj[data-name="my_part.stl"] .mag').click();
+  // ... and from a program: pick it up from the cube and put it down on the Tile
+  const rc = await page.evaluate(() => app.host.runCount || 0);
+  await page.evaluate(() => app.editor.open("from cte import *\narm = Arm()\narm.move_to(150, 150, 86)\narm.set_end_effector_magnet(True)\narm.move_to(150, 150, 120)\narm.move_to(60, 40, 120)\narm.set_end_effector_magnet(False)\narm.move_to(120, 0, 100)\n", { name: "carry.py" }));
+  await page.locator("#btn-run").click();
+  await page.waitForFunction((n) => app.host.runCount > n && app.host.state === "finished" && app.c.isDone(), rc, { timeout: 60000 });
+  cyl = await page.evaluate(() => { const m = app.models.find((x) => x.name === "my_part.stl"); return { off: m.offset.map(Math.round), held: m.held }; });
+  assert(!cyl.held && cyl.off[2] === 0 && Math.abs(cyl.off[0] - 60) < 2 && Math.abs(cyl.off[1] - 40) < 2, "program carry: " + JSON.stringify(cyl));
+  return `pallet carried 15 mm under the tip and dropped; cylinder onto Cube 4 (z 25); program moved it to (${cyl.off})`;
+});
+
+await check("yaw and Magnetic are kept in scene files and the browser library", async () => {
+  await page.evaluate(() => { const m = app.models.find((x) => x.name === "bambu_plate.3mf"); app.selectedObject = m; app.syncPanel(true); });
+  await page.locator("#sel-magnetic").click();
+  const json = await page.evaluate(() => app.sceneJSON());
+  const d = JSON.parse(json);
+  const bp = d.models.find((m) => m.name === "bambu_plate.3mf"), mp = d.models.find((m) => m.name === "my_part.stl");
+  assert(bp.yaw === 15 && bp.magnetic === false && mp.magnetic === true && d.toggles.snap_to_surface === true && d.toggles.block_overlaps === true, JSON.stringify({ bp, mp, t: d.toggles }));
+  await page.waitForFunction(async () => { await app.library.refresh(); return app.library.stored.find((s) => s.key === "bambu_plate.3mf")?.magnetic === false; }, null, { timeout: 5000, polling: 100 });
+  const lib = await page.evaluate(() => app.library.stored.find((s) => s.key === "bambu_plate.3mf")?.magnetic);
+  await page.evaluate(() => app.clearObjects());
+  await pick("#file-scene", "my_scene.json", json, "application/json");
+  await page.waitForFunction((n) => app.c.objects.length + app.models.length === n, d.objects.length + d.models.length, { timeout: 15000 });
+  const back = await page.evaluate(() => { const m = app.models.find((x) => x.name === "bambu_plate.3mf"); return { yaw: m.yaw, mag: m.magnetic, snap: app.snapToSurface }; });
+  assert(back.yaw === 15 && back.mag === false && back.snap, JSON.stringify(back));
+  // library default: re-adding bambu_plate gives a non-magnetic model; restore it afterwards
+  const again = await page.evaluate(async () => { const m = await app.library.load({ stored: "bambu_plate.3mf" }, "bambu_plate.3mf"); return m.magnetic; });
+  assert(again === false, "re-added model should default to non-magnetic");
+  await page.evaluate(async () => { const m = app.models.find((x) => x.name === "bambu_plate.3mf"); app.setMagnetic(m, true); await app.library.setStoredMagnetic("bambu_plate.3mf", true); });
+  // tidy up for the checks that follow: only the two imports and Cube 1 / Cube 2 stay
+  await page.evaluate(() => { for (const b of [...app.c.objects, ...app.models]) if (/Cube [34]|test_pallet/.test(b.name)) app.removeObject(b); app.selectedObject = null; app.syncPanel(true); });
+  return `scene: yaw ${bp.yaw}, magnetic ${bp.magnetic}; library default ${lib}; reloaded ${JSON.stringify(back)}`;
+});
+
 await check("drag an object, undo and redo", async () => {
   const ob0 = await page.evaluate(() => { const o = app.c.objects.at(-1); return { name: o.name, pos: [...o.pos] }; });
   const a = await page.evaluate((p) => app.renderer.project([p[0], p[1], 20]), ob0.pos);

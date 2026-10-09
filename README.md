@@ -117,6 +117,26 @@ The first time someone presses **Run**, the app downloads Python for the browser
   platform, drag objects with the mouse, Delete removes, Ctrl+Z / Ctrl+Y undo and redo.
   **Save scene** / **Load scene** download and open a scene `.json` (imported models are
   embedded). The scene is also autosaved in the browser.
+- **Moving an object precisely**: click an object and a **move gizmo** appears - drag the
+  red (X), green (Y) or blue (Z) arrow to move along that axis only. The *Selected* panel
+  under the list has **X / Y / Z fields** (type a value in mm), **−/+ steppers** with a
+  **Step** of 1, 5, 10 or 50 mm, and **Yaw** buttons that turn an imported model in 15°
+  steps (also `,` and `.`). Keyboard: **arrow keys** nudge in X / Y, **PageUp / PageDown**
+  (or Shift+Up / Down) in Z - the arrows go back to jogging the joint when nothing is
+  selected (Esc deselects). Objects can be raised and **stacked** on cubes, pallets or any
+  model, and never go below the Tile. With **Snap to surface** on, a moved object rests on
+  whatever is under it (drag a cube over a pallet and it climbs in); **Drop** lets a raised
+  object fall. **Block overlaps** refuses moves that would put an object inside another
+  (switch it off to just get a warning).
+- **Imported models behave like their shape**: collisions between the arm and an STL / 3MF
+  use the real triangles (a BVH), so the tool can reach into a pallet's slots without a
+  false alarm and is stopped by its walls. Every imported model has a **Magnetic**
+  checkbox (on by default, remembered in scene files and in the browser library): the
+  magnet picks it up when the tool tip is within a few millimetres of its surface, carries
+  it rigidly (it turns with the tool), and on release it settles on the Tile, a cube or
+  another model under it. This works from the G key, the Magnet button and from programs
+  (`arm.set_end_effector_magnet(True)`). Cubes and disks dropped by the magnet settle the
+  same way.
 - **Drop files on the 3D view**: models (`.stl`, `.3mf`), scenes (`.json`) and programs
   (`.ctepython`, `.py`) all land in the right place. The file pickers are just as
   forgiving: picking an STL in *Load scene*, or a scene in *Import model…*, simply does the
@@ -196,7 +216,8 @@ tool-down, as in VEX's lesson picture, and the whole Tile is green on the reach 
 
 ## 7. Tests (optional, for developers)
 
-- `node --test tests/*.test.mjs` - kinematics, IK, reach map and collision results compared with
+- `node --test tests/*.test.mjs` - the mesh BVH, stacking / snap / overlap rules, mesh-based arm
+  collisions and the magnet carrying models (`tests/bodies.test.mjs`); kinematics, IK, reach map and collision results compared with
   `tests/kinematics_fixtures.json` (a regression snapshot made by `node tests/gen_fixtures.mjs`;
   regenerate it when `js/arm_config.js` changes), the byte-identical `.ctepython` export
   round trip for the 8 examples, and the model file readers (binary / ASCII STL, 3MF with the
@@ -206,7 +227,9 @@ tool-down, as in VEX's lesson picture, and the whole Tile is green on the reach 
 - `python tests/test_simrt.py` - the Python program runner (`python/simrt.py`) in normal
   CPython: the 8 examples, Stop, errors with line numbers, threads, wait().
 - `tests/e2e_browser.mjs` - Playwright browser test (UI, all 8 samples, export, models,
-  scenes, layout). See the comment at the top of the file for how to run it.
+  scenes, the move gizmo / position editor / keyboard nudges, stacking, overlaps, mesh
+  collisions, the magnet with models, undo / redo, layout). See the comment at the top of
+  the file for how to run it.
 
 ## Credits and licenses
 

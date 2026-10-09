@@ -177,7 +177,21 @@ select { height: 28px; border: 1px solid var(--border); border-radius: 8px; back
 .obj .st.held { background: var(--accent); } .obj .st.off { background: var(--red); }
 .obj .x { width: 22px; height: 22px; padding: 0; border: none; background: transparent; color: var(--muted); font-size: 14px; flex: none; }
 .obj .x:hover { background: var(--red-soft) !important; color: var(--red); }
+.obj .mag { width: 14px; height: 14px; margin: 0 2px; flex: none; accent-color: var(--accent); cursor: pointer; }
 .empty { color: var(--muted); font-size: 12px; padding: 4px 8px; }
+
+/* selected object: position editor */
+.sel-panel { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 4px; }
+.sel-panel .row { margin: 4px 0; }
+.sel-panel .lbl { margin-right: 2px; }
+.sel-panel .ax { font-weight: 600; width: 12px; }
+.sel-panel .ax.x { color: #c81e1e; } .sel-panel .ax.y { color: #1e8c28; } .sel-panel .ax.z { color: #1e46dc; }
+.sel-panel .field { width: 80px; }
+.sel-panel .yaw { min-width: 40px; }
+.step-seg { height: 26px; padding: 2px; }
+.step-seg button { height: 20px; padding: 0 5px; min-width: 24px; font-size: 11.5px; }
+.chk { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text2); white-space: nowrap; cursor: pointer; }
+.chk input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
 
 /* program */
 .tower { display: flex; align-items: center; gap: 5px; height: 22px; border: none; background: transparent; padding: 0 4px; font-weight: 400; color: var(--muted); }

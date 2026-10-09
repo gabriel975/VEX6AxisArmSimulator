@@ -12,6 +12,7 @@ import * as cte from "./ctefile.js";
 import * as sio from "./scene_io.js";
 import { ModelLibrary, toBase64, fromBase64 } from "./model_library.js";
 import { detectFileKind, KIND_LABEL, SUPPORTED_SUMMARY } from "./file_formats.js";
+import * as bodies from "./bodies.js";
 import { AUTOSAVE, PYODIDE_URL } from "../settings.js";
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -33,7 +34,7 @@ const f0 = (v) => (Math.round(v) + 0).toFixed(0);
 const f1 = (v) => (Math.round(v * 10) / 10 + 0).toFixed(1);
 
 export const HELP_SECTIONS = [
-  ["Joints", [["1 - 6", "select a joint"], ["Left / Right", "turn it (Shift = faster)"], ["Slider", "click or drag to set a joint"]]],
+  ["Joints", [["1 - 6", "select a joint"], ["Left / Right", "turn it (Shift = faster) - with no object selected"], ["Slider", "click or drag to set a joint"]]],
   ["Tool", [["W S  A D  R F", "jog the tool in X / Y / Z"], ["T", "type a target X, Y, Z"], ["H", "home (safe position 120, 0, 100)"],
     ["G", "magnet on / off"], ["Tab", "switch tool (magnet / pen)"], ["+ / -", "arm speed up / down"]]],
   ["Program", [["L", "load and run a project from your computer"], ["F5", "run the code in the editor"], ["Space / F8", "pause / resume"],
@@ -44,6 +45,8 @@ export const HELP_SECTIONS = [
     ["Tab", "indent 4 spaces (Shift = unindent)"], ["Ctrl+/", "comment lines"], ["Esc", "leave the editor (keys go to the arm)"]]],
   ["Scene", [["Add model", "bundled models, your imports, cube, disk"], ["Import model…", "your own STL / 3MF file (M)"], ["Drop a file", "on the 3D view: model, scene or program"],
     ["P", "place mode: click the platform"], ["Drag", "move an object on the platform"],
+    ["Arrows", "nudge the selected object in X / Y by the step"], ["PgUp / PgDn", "raise / lower it (Z) - Shift+Up / Down too"],
+    ["Gizmo", "drag a red / green / blue arrow to move along one axis"], [", .", "turn a model 15 degrees"],
     ["Ctrl+Z / Y", "undo / redo scene changes"], ["Delete", "remove the selected object"],
     ["Save scene", "save the platform and objects as .json"], ["Load scene", "open a saved .json scene"],
     ["N", "reset the cubes and disk"], ["C", "clear the pen drawing"]]],
@@ -56,6 +59,9 @@ const STATUS_STYLE = { idle: ["Idle", "#8c93a0"], starting: ["Starting", "#16a34
   stopped: ["Stopped", "#d97706"], error: ["Error", "#dc2626"] };
 const PATH_TRAIL_MAX = 3000;
 const COLLAPSE_KEY = "six-axis-arm.collapsed.v1";
+const PREFS_KEY = "six-axis-arm.prefs.v1";
+const MOVE_STEPS = [1, 5, 10, 50];
+const AXIS_INDEX = { x: 0, y: 1, z: 2 };
 const CODE_KEY = "six-axis-arm.code.v1";
 const OBJ_COLORS = [[0.85, 0.15, 0.15], [0.15, 0.35, 0.9], [0.1, 0.7, 0.3], [0.95, 0.75, 0.1], [0.6, 0.3, 0.8]];
 const MODEL_COLORS = [[0.2, 0.72, 0.75], [0.95, 0.6, 0.15], [0.6, 0.4, 0.85], [0.4, 0.7, 0.3]];
@@ -63,7 +69,12 @@ const MODEL_COLORS = [[0.2, 0.72, 0.75], [0.95, 0.6, 0.15], [0.6, 0.4, 0.85], [0
 class App {
   constructor() {
     this.c = new ArmController();
+    this.c.getModels = () => this.models;
     this.c.addDefaultObjects();
+    this.moveStep = 10;                // mm per nudge / stepper click
+    this.snapToSurface = true;         // moved objects rest on what is under them
+    this.blockOverlaps = true;         // refuse moves into another object (false = warn)
+    try { const pr = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}"); if (MOVE_STEPS.includes(pr.moveStep)) this.moveStep = pr.moveStep; } catch { /* ignore */ }
     const say = this.c.say.bind(this.c);
     this.c.say = (msg) => { say(msg); this.onSay(msg); };
     this.selected = 1;
@@ -199,6 +210,24 @@ class App {
       inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") inp.blur(); else if (ev.key === "Escape") { inp.value = ""; inp.blur(); } ev.stopPropagation(); });
       inp.addEventListener("blur", () => { if (inp.value.trim()) apply(); this.syncPanel(true); });
     }
+    // typed object position (X / Y / Z fields of the selected object)
+    for (const [id, axis] of [["sel-x", 0], ["sel-y", 1], ["sel-z", 2]]) {
+      const inp = $("#" + id);
+      const apply = () => {
+        const b = this.selectedObject;
+        if (!b) return;
+        const v = Number(inp.value.replace(/mm/gi, "").trim());
+        if (!Number.isFinite(v)) { this.toast("Error: type a position in mm, e.g. 150", true); this.syncPanel(true); return; }
+        const target = [...bodies.origin(b)];
+        if (Math.abs(target[axis] - v) < 1e-9) { this.syncPanel(true); return; }
+        const zMove = axis === 2;
+        target[axis] = v;
+        this.setSelectedPosition(target, { axisLabel: "XYZ"[axis], zMove });
+      };
+      inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") inp.blur(); else if (ev.key === "Escape") { this.syncPanel(true); inp.blur(); } ev.stopPropagation(); });
+      inp.addEventListener("blur", () => { if (inp.value.trim()) apply(); this.syncPanel(true); });
+    }
+    $("#sel-magnetic").addEventListener("change", (ev) => { if (this.selectedObject) this.setMagnetic(this.selectedObject, ev.target.checked); });
     // sim speed
     const seg = $("#sim-seg");
     for (const s of SIM_SPEEDS) seg.append(h("button", { "data-action": "sim_speed", "data-arg": s }, `${s}×`));
@@ -289,6 +318,12 @@ class App {
         ev.stopImmediatePropagation();
         return;
       }
+      // the move gizmo of the selected object comes first: drag an arrow = move along that axis
+      const axis = this.selectedObject && !this.selectedObject.held ? this.renderer.pickGizmo(mx, my) : null;
+      if (axis) {
+        if (this.startAxisDrag(this.selectedObject, axis, mx, my)) { cv.setPointerCapture(ev.pointerId); ev.stopImmediatePropagation(); }
+        return;
+      }
       const obj = this.pickObjectRay(mx, my);
       if (obj) {
         this.selectedObject = obj;
@@ -302,10 +337,15 @@ class App {
     cv.addEventListener("pointermove", (ev) => {
       const [mx, my] = pos(ev);
       if (this.drag) {
-        if (this.dragObjectTo(this.drag.obj, mx, my, this.drag.grab)) this.drag.moved = true;
+        const d = this.drag;
+        if (d.axis) { if (this.dragAxisTo(d, mx, my)) d.moved = true; }
+        else if (this.dragObjectTo(d.obj, mx, my, d.grab)) d.moved = true;
         ev.stopImmediatePropagation();
       } else if (this.placeMode) {
         this.mouseFloor = this.renderer.floorPoint(mx, my);
+      } else if (this.selectedObject && !this.selectedObject.held) {
+        const ax = this.renderer.pickGizmo(mx, my);
+        if (ax !== this.hoverAxis) { this.hoverAxis = ax; cv.style.cursor = ax ? "grab" : ""; }
       }
     });
     cv.addEventListener("pointerup", (ev) => {
@@ -314,9 +354,9 @@ class App {
         const d = this.drag;
         this.drag = null;
         if (d.moved) {
-          const p = d.obj.offset || d.obj.pos;
-          this.toast(`Moved ${d.obj.name} to (${f0(p[0])}, ${f0(p[1])})`, false);
-          this.sceneChanged();
+          if (d.axis === "z" && this.snapToSurface) this.settleBody(d.obj);     // let go in mid-air: it drops onto what is below
+          this.movedToast(d.obj, bodies.overlapping(d.obj, this.c.bodies()).map((h) => h.name), "moved to");
+          this.afterMove(d.obj);
         } else this.history.discardIfUnchanged(this);
         ev.stopImmediatePropagation();
         return;
@@ -362,6 +402,17 @@ class App {
       if (ev.altKey) return;
       if (!$("#library").hidden && k === "Escape") { this.toggleLibrary(false); return; }
       if (this.placeMode && k === "Escape") { this.togglePlaceMode(false); return; }
+      // a selected object takes the arrow keys (nudges); joints get them back when nothing is selected
+      if (this.selectedObject && !this.selectedObject.held) {
+        const nudges = { ArrowUp: ["x", 1], ArrowDown: ["x", -1], ArrowRight: ["y", 1], ArrowLeft: ["y", -1], PageUp: ["z", 1], PageDown: ["z", -1] };
+        if (nudges[k]) {
+          let [axis, sign] = nudges[k];
+          if (ev.shiftKey && (k === "ArrowUp" || k === "ArrowDown")) axis = "z";
+          ev.preventDefault(); this.nudgeSelected(axis, sign); return;
+        }
+        if (k === "," || k === ".") { ev.preventDefault(); this.rotateSelected(k === "," ? -15 : 15); return; }
+        if (k === "Escape") { this.selectedObject = null; this.syncPanel(true); }
+      }
       const lk = k.length === 1 ? k.toLowerCase() : k;
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "w", "a", "s", "d", "r", "f"].includes(lk)) {
         this.keys.add(lk.toLowerCase()); ev.preventDefault(); return;
@@ -453,6 +504,12 @@ class App {
       case "scene_load": $("#file-scene").click(); break;
       case "undo": this.undoScene(); break;
       case "redo": this.redoScene(); break;
+      case "nudge": { const [axis, sign] = String(arg).split(","); this.nudgeSelected(axis, Number(sign)); break; }
+      case "step_size": this.setMoveStep(Number(arg)); break;
+      case "rotate": this.rotateSelected(Number(arg)); break;
+      case "drop": this.dropSelected(); break;
+      case "snap": this.snapToSurface = !this.snapToSurface; this.toast(`Snap to surface ${this.snapToSurface ? "on" : "off"}`, false); this.sceneChanged(false); break;
+      case "block_overlap": this.blockOverlaps = !this.blockOverlaps; this.toast(`Overlapping objects: ${this.blockOverlaps ? "blocked" : "allowed (warn only)"}`, false); this.sceneChanged(false); break;
       case "reach": this.toggleReach(); break;
       case "reach_band": this.reach.showBand = !this.reach.showBand; this.sceneChanged(false); break;
       case "reach_height": this.reach.height = Math.max(10, Math.min(300, this.reach.height + arg)); this.sceneChanged(false); break;
@@ -585,6 +642,7 @@ class App {
       if (record) this.history.push(this, `Add ${m.name}`);
       m.offset = [x, y, 0];
       this.models.push(m);
+      if (this.snapToSurface) m.offset[2] = bodies.dropZ(m, this.c.bodies(), { fromAbove: true });   // e.g. placed onto a pallet
       this.modelCount++;
       this.selectedObject = m;
       const s = m.size();
@@ -646,6 +704,7 @@ class App {
     const ob = new SceneObject(`${base} ${n}`, kind, [x, y, 0], { size, height, color: col });
     if (record) this.history.push(this, `Add ${ob.name}`);
     this.c.objects.push(ob);
+    if (this.snapToSurface) ob.pos[2] = bodies.dropZ(ob, this.c.bodies(), { fromAbove: true });
     this.selectedObject = ob;
     this.toast(`Added ${ob.name} at (${f0(x)}, ${f0(y)})`, false);
     this.sceneChanged();
@@ -751,13 +810,125 @@ class App {
     pop.style.top = top + "px";
   }
 
-  // --------------------------------------------------------- dragging ---
-  objectBounds(obj) {
-    if (obj.offset) return obj.worldBounds();
-    const half = obj.size / 2, p = obj.pos;
-    return [[p[0] - half, p[1] - half, p[2]], [p[0] + half, p[1] + half, p[2] + obj.height]];
+  // --------------------------------------------------------- moving objects ---
+  objectBounds(obj) { return bodies.aabb(obj); }
+  objHalf(obj) { return bodies.halfSize(obj); }
+  /** Try to put `body`'s origin at `target` (mm). Clamps to the platform, keeps it above
+   *  the Tile, applies snap-to-surface (when `snap`) and the overlap rule.
+   *  -> {ok, blocked: [names]} ; on a blocked move the body is left where it was. */
+  moveBody(body, target, { snap = this.snapToSurface, settle = "above" } = {}) {
+    const o = bodies.origin(body), prev = [...o];
+    const [hx, hy] = bodies.halfSize(body);
+    const spot = this.c.platform.clamp(target[0], target[1], hx, hy) || [target[0], target[1]];
+    const zMin = o[2] - bodies.bottomZ(body);                       // origin z when the bottom touches the Tile
+    bodies.setOrigin(body, [spot[0], spot[1], Math.max(zMin, target[2])]);
+    const others = this.c.bodies();
+    if (snap) bodies.origin(body)[2] = bodies.dropZ(body, others, { fromAbove: settle === "above" });
+    const hits = bodies.overlapping(body, others);
+    if (hits.length && this.blockOverlaps) { bodies.setOrigin(body, prev); return { ok: false, blocked: hits.map((h) => h.name) }; }
+    return { ok: true, blocked: hits.map((h) => h.name) };
   }
-  objHalf(obj) { return obj.offset ? obj.halfSize() : [obj.size / 2, obj.size / 2]; }
+  /** After any manual move: things that were resting on the moved body fall, the UI updates. */
+  afterMove(body) {
+    if (this.snapToSurface) this.settleOthers(body);
+    this.sceneChanged();
+  }
+  settleBody(body) { bodies.origin(body)[2] = bodies.dropZ(body, this.c.bodies(), { fromAbove: false }); }
+  settleOthers(except = null) {
+    const all = this.c.bodies().filter((b) => !b.held && b !== except).sort((a, b) => bodies.bottomZ(a) - bodies.bottomZ(b));
+    for (const b of all) if (bodies.bottomZ(b) > 0.01) this.settleBody(b);
+  }
+  blockedToast(body, blocked) { this.toast(`Can't move ${body.name} there - it would overlap ${blocked.slice(0, 2).join(" and ")}`, true); }
+  /** "Cube 3 at (150, 160, 0)" plus " - overlaps Cube 4" when the overlap rule is set to warn. */
+  movedToast(body, blocked = [], verb = "at") {
+    const p = bodies.origin(body);
+    const note = blocked.length ? ` - overlaps ${blocked.slice(0, 2).join(" and ")}` : "";
+    this.toast(`${body.name} ${verb} (${f0(p[0])}, ${f0(p[1])}, ${f0(p[2])})${note}`, blocked.length > 0);
+  }
+
+  setMoveStep(step) {
+    if (!MOVE_STEPS.includes(step)) return;
+    this.moveStep = step;
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ moveStep: step })); } catch { /* ignore */ }
+    this.syncPanel(true);
+  }
+  /** Move the selected object by one step along an axis (keyboard / stepper). */
+  nudgeSelected(axis, sign) {
+    const b = this.selectedObject;
+    if (!b) { this.toast("Nothing selected - click an object first", true); return false; }
+    if (b.held) { this.toast(`Can't move ${b.name} - the magnet is holding it`, true); return false; }
+    const i = AXIS_INDEX[axis];
+    if (i === undefined) return false;
+    const target = [...bodies.origin(b)];
+    target[i] += sign * this.moveStep;
+    return this.setSelectedPosition(target, { axisLabel: axis.toUpperCase(), zMove: axis === "z" });
+  }
+  /** Put the selected object at an absolute position (typed values or a nudge). */
+  setSelectedPosition(target, { axisLabel = "", zMove = false } = {}) {
+    const b = this.selectedObject;
+    if (!b || b.held) return false;
+    const before = [...bodies.origin(b)];
+    this.history.push(this, `Move ${b.name}${axisLabel ? " " + axisLabel : ""}`, 1200);
+    // a deliberate Z move is honoured even with snap on - unless it is a move *down*, which drops onto the surface
+    const snap = this.snapToSurface && (!zMove || target[2] < before[2]);
+    const r = this.moveBody(b, target, { snap, settle: zMove ? "gravity" : "above" });
+    if (!r.ok) { this.history.discardIfUnchanged(this); this.blockedToast(b, r.blocked); this.syncPanel(true); return false; }
+    const p = bodies.origin(b);
+    if (p.every((v, k) => Math.abs(v - before[k]) < 1e-9)) { this.history.discardIfUnchanged(this); this.syncPanel(true); return false; }
+    this.movedToast(b, r.blocked);
+    this.afterMove(b);
+    return true;
+  }
+  rotateSelected(deg) {
+    const b = this.selectedObject;
+    if (!b) { this.toast("Nothing selected - click a model first", true); return false; }
+    if (!bodies.isModel(b)) { this.toast(`${b.name} is a ${b.kind} - only imported models can be turned`, true); return false; }
+    if (b.held) { this.toast(`Can't turn ${b.name} - the magnet is holding it`, true); return false; }
+    const old = b.yaw || 0, next = ((Math.round((old + deg) / 15) * 15 + 180) % 360 + 360) % 360 - 180;
+    this.history.push(this, `Turn ${b.name}`, 1200);
+    b.yaw = next;
+    const hits = bodies.overlapping(b, this.c.bodies());
+    if (hits.length && this.blockOverlaps) { b.yaw = old; this.history.discardIfUnchanged(this); this.blockedToast(b, hits.map((h) => h.name)); return false; }
+    if (this.snapToSurface) bodies.origin(b)[2] = bodies.dropZ(b, this.c.bodies(), { fromAbove: true });
+    this.toast(`${b.name} turned to ${f0(next)}°${hits.length ? ` - overlaps ${hits.map((h) => h.name).slice(0, 2).join(" and ")}` : ""}`, hits.length > 0);
+    this.afterMove(b);
+    return true;
+  }
+  dropSelected() {
+    const b = this.selectedObject;
+    if (!b || b.held) { this.toast(b ? `${b.name} is held by the magnet` : "Nothing selected", true); return false; }
+    const before = bodies.origin(b)[2];
+    this.history.push(this, `Drop ${b.name}`);
+    this.settleBody(b);
+    if (Math.abs(bodies.origin(b)[2] - before) < 1e-9) { this.history.discardIfUnchanged(this); this.toast(`${b.name} is already resting`, false); return false; }
+    this.toast(`${b.name} dropped to z = ${f0(bodies.origin(b)[2])}`, false);
+    this.afterMove(b);
+    return true;
+  }
+  setMagnetic(model, on) {
+    if (!bodies.isModel(model)) return;
+    model.magnetic = !!on;
+    if (model.source?.stored) this.library.setStoredMagnetic(model.source.stored, on).catch(() => {});
+    this.toast(`${model.name}: the magnet ${on ? "can" : "can't"} pick it up`, false);
+    this.sceneChanged();
+  }
+
+  // ------------------------------------------------------------- dragging ---
+  startAxisDrag(obj, axis, mx, my) {
+    if (obj.held) return false;
+    const center = this.gizmoCenter(obj);
+    const dir = [axis === "x" ? 1 : 0, axis === "y" ? 1 : 0, axis === "z" ? 1 : 0];
+    this.history.push(this, `Move ${obj.name} ${axis.toUpperCase()}`);
+    this.drag = { obj, axis, dir, center, t0: this.renderer.axisParam(mx, my, center, dir), start: [...bodies.origin(obj)], moved: false };
+    return true;
+  }
+  dragAxisTo(d, mx, my) {
+    const t = this.renderer.axisParam(mx, my, d.center, d.dir);
+    const target = d.start.map((v, k) => v + d.dir[k] * (t - d.t0));
+    const snap = this.snapToSurface && d.axis !== "z";
+    return this.moveBody(d.obj, target, { snap, settle: "above" }).ok;
+  }
+  gizmoCenter(obj) { const [lo, hi] = bodies.aabb(obj); return [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, hi[2] + 1]; }
   pickObjectRay(mx, my, pad = 3) {
     const ray = this.renderer.ray(mx, my);
     let best = null, bt = null;
@@ -779,29 +950,26 @@ class App {
   }
   startObjectDrag(obj, mx, my) {
     if (obj.held) { this.toast(`Can't move ${obj.name} - the magnet is holding it`, true); return false; }
-    const fp = this.renderer.floorPoint(mx, my);
+    // grab on the plane through the object's bottom, so a stacked object drags where it is
+    const fp = this.renderer.floorPoint(mx, my, bodies.bottomZ(obj));
     if (!fp) return false;
-    const p = obj.offset || obj.pos;
+    const p = bodies.origin(obj);
     this.history.push(this, `Move ${obj.name}`);
-    this.drag = { obj, grab: [p[0] - fp[0], p[1] - fp[1]], moved: false };
+    this.drag = { obj, grab: [p[0] - fp[0], p[1] - fp[1]], planeZ: bodies.bottomZ(obj), moved: false };
     return true;
   }
   dragObjectTo(obj, mx, my, grab) {
     if (obj.held) return false;
-    const fp = this.renderer.floorPoint(mx, my);
+    const fp = this.renderer.floorPoint(mx, my, this.drag?.planeZ ?? 0);
     if (!fp) return false;
-    const [hx, hy] = this.objHalf(obj);
-    const spot = this.c.platform.clamp(fp[0] + grab[0], fp[1] + grab[1], hx, hy);
-    if (!spot) return false;
-    if (obj.offset) { obj.offset[0] = spot[0]; obj.offset[1] = spot[1]; }
-    else { obj.pos[0] = spot[0]; obj.pos[1] = spot[1]; obj.pos[2] = 0; }
-    return true;
+    const o = bodies.origin(obj);
+    return this.moveBody(obj, [fp[0] + grab[0], fp[1] + grab[1], o[2]], { settle: "above" }).ok;
   }
 
   // ------------------------------------------------------ scene objects ---
   sceneItems() {
     const items = this.c.objects.map((ob) => ({ obj: ob, name: ob.name, type: ob.kind[0].toUpperCase() + ob.kind.slice(1), pos: ob.pos, held: ob.held, color: ob.color }));
-    for (const m of this.models) items.push({ obj: m, name: m.name, type: m.fmt, pos: m.offset, held: false, color: m.color });
+    for (const m of this.models) items.push({ obj: m, name: m.name, type: m.fmt, pos: m.offset, held: !!m.held, color: m.color });
     return items;
   }
   objectOnPlatform(obj) {
@@ -813,8 +981,11 @@ class App {
     this.history.push(this, `Remove ${obj.name}`);
     if (this.selectedObject === obj) this.selectedObject = null;
     const i = this.models.indexOf(obj);
-    if (i >= 0) { this.models.splice(i, 1); this.toast(`Removed ${obj.name}`, false); this.sceneChanged(); return true; }
-    if (this.c.removeObject(obj)) { this.sceneChanged(); return true; }
+    if (i >= 0) {
+      if (obj.held) { obj.held = false; this.c.held = null; this.c.magnetOn = false; }
+      this.models.splice(i, 1); this.toast(`Removed ${obj.name}`, false); this.afterMove(null); return true;
+    }
+    if (this.c.removeObject(obj)) { this.afterMove(null); return true; }
     this.history.discardIfUnchanged(this);
     return false;
   }
@@ -825,6 +996,8 @@ class App {
   clearObjects() {
     this.history.push(this, "Clear all objects");
     this.c.clearObjects();
+    if (this.models.some((m) => m.held)) { this.c.held = null; this.c.magnetOn = false; }
+    for (const m of this.models) m.held = false;
     this.models = [];
     this.selectedObject = null;
     this.toast("All objects removed", false);
@@ -833,6 +1006,7 @@ class App {
   resetObjects() {
     this.history.push(this, "Reset cubes and disk");
     this.c.magnetOn = false;
+    if (this.c.held) { this.c.held.body.held = false; this.c.held = null; }
     this.c.addDefaultObjects();
     if (this.selectedObject && !this.models.includes(this.selectedObject)) this.selectedObject = null;
     this.toast("Cubes and disk reset", false);
@@ -881,7 +1055,8 @@ class App {
   // ------------------------------------------------------------ scene files ---
   sceneToggles() {
     return { reach_map: this.showReach, reach_band: this.reach.showBand, reach_height: this.reach.height, path_trail: this.showPath,
-      stop_on_collision_manual: this.stopOnCollision.manual, stop_on_collision_program: this.stopOnCollision.program };
+      stop_on_collision_manual: this.stopOnCollision.manual, stop_on_collision_program: this.stopOnCollision.program,
+      snap_to_surface: this.snapToSurface, block_overlaps: this.blockOverlaps };
   }
   sceneChanged(structural = true) {
     if (structural) this.sceneVersion = (this.sceneVersion || 0) + 1;
@@ -927,6 +1102,8 @@ class App {
       try {
         const md = await this.library.load(source, fname, Number(m.scale || 1));
         md.offset = (m.pos || [200, 0, 0]).map(Number);
+        md.yaw = Number(m.yaw || 0);
+        if (m.magnetic !== undefined) md.magnetic = !!m.magnetic;
         md.color = (m.color || MODEL_COLORS[this.modelCount % MODEL_COLORS.length]).map(Number);
         md.name = m.name || fname;
         models.push(md);
@@ -937,6 +1114,7 @@ class App {
     const objs = (d.objects || []).map((o) => new SceneObject(String(o.name ?? "Object"), o.kind || "cube", (o.pos || [150, 0, 0]).map(Number),
       { size: Number(o.size ?? 25), height: Number(o.height ?? 25), color: (o.color || [0.8, 0.2, 0.2]).map(Number) }));
     if (c.magnetOn) c.setMagnet(false);
+    if (c.held) { c.held.body.held = false; c.held = null; }
     const plat = d.platform || {};
     c.platform.resize(Number(plat.width ?? cfg.PLATFORM_SIZE[0]), Number(plat.depth ?? cfg.PLATFORM_SIZE[1]));
     c.objects = objs;
@@ -951,6 +1129,8 @@ class App {
     this.showPath = !!(t.path_trail ?? this.showPath);
     this.stopOnCollision.manual = t.stop_on_collision_manual ?? true;
     this.stopOnCollision.program = t.stop_on_collision_program ?? false;
+    this.snapToSurface = t.snap_to_surface ?? true;
+    this.blockOverlaps = t.block_overlaps ?? true;
     this.selectedObject = null;
     this.renderer.resetCamera();
     if (!quiet || missing.length) {
@@ -1148,23 +1328,24 @@ class App {
   }
 
   // ========================================================= collisions ===
-  collisionBoxes() {
-    const boxes = [];
-    for (const ob of this.c.objects) {
-      if (ob.held) continue;
-      const hs = ob.size / 2, p = ob.pos;
-      boxes.push({ name: ob.name, lo: [p[0] - hs, p[1] - hs, p[2]], hi: [p[0] + hs, p[1] + hs, p[2] + ob.height] });
+  /** What the arm can bump into: cubes / disks as boxes, imported models with their real mesh. */
+  collisionBodies() {
+    const items = [];
+    for (const b of this.c.bodies()) {
+      if (b.held) continue;
+      const [lo, hi] = bodies.aabb(b);
+      items.push({ name: b.name, lo, hi, body: b });
     }
-    for (const m of this.models) { const [lo, hi] = m.worldBounds(); boxes.push({ name: m.name, lo, hi }); }
-    return boxes;
+    return items;
   }
+  collisionBoxes() { return this.collisionBodies(); }
   /** Collision warnings: red links + a toast. Manual moves stop before a
    * collision; programs only warn unless "Stop on collision: Programs" is on. */
   checkCollisions() {
     const c = this.c;
     const q = [...c.q];
     const fk = c.fk(q);
-    let hits = collision.armObjectHits(fk, c.toolType, this.collisionBoxes());
+    let hits = collision.armObjectHits(fk, c.toolType, this.collisionBodies());
     let selfh = collision.armSelfHits(fk, c.toolType);
     const key = (x) => x.join("|");
     let now = new Set([...hits.map(key), ...selfh.map(key)]);
@@ -1264,6 +1445,8 @@ class App {
       const [x, y] = this.mouseFloor;
       r.setGhost({ x, y, hx, hy, h: hh, ok: c.platform.contains(x, y, hx, hy) });
     } else r.setGhost(null);
+    if (this.selectedObject && !this.selectedObject.held && !this.placeMode) r.setGizmo(this.gizmoCenter(this.selectedObject), this.drag?.axis || this.hoverAxis || null);
+    else r.setGizmo(null);
     r.render();
     this.drawLabels();
     this.syncPanel();
@@ -1371,7 +1554,7 @@ class App {
     $("#btn-clear-all").disabled = !items.length;
     $("#btn-place").classList.toggle("active", this.placeMode);
     const list = $("#scene-list");
-    const sig = JSON.stringify(items.map((it) => [it.name, it.type, it.pos.map((v) => Math.round(v)), it.held, this.objectOnPlatform(it.obj), it.obj === this.selectedObject, it.color]));
+    const sig = JSON.stringify(items.map((it) => [it.name, it.type, it.pos.map((v) => Math.round(v)), it.held, this.objectOnPlatform(it.obj), it.obj === this.selectedObject, it.color, it.obj.magnetic]));
     if (sig !== this._sceneSig) {
       this._sceneSig = sig;
       list.innerHTML = "";
@@ -1379,14 +1562,18 @@ class App {
       for (const it of items) {
         const off = !it.held && !this.objectOnPlatform(it.obj);
         const sel = it.obj === this.selectedObject;
+        const isModel = bodies.isModel(it.obj);
         list.append(h("div", { class: "obj" + (sel ? " sel" : ""), role: "option", "aria-selected": String(sel), title: it.name, "data-name": it.name,
-          onclick: (ev) => { if (ev.target.closest(".x")) return; this.selectedObject = sel ? null : it.obj; this.syncPanel(true); } },
+          onclick: (ev) => { if (ev.target.closest(".x, .mag")) return; this.selectedObject = sel ? null : it.obj; this.syncPanel(true); } },
         h("span", { class: "sw", style: `background:${css(it.color)}` }), h("span", { class: "nm" }, it.name), h("span", { class: "ty" }, it.type),
         it.held || off ? h("span", { class: "st " + (it.held ? "held" : "off") }, it.held ? "held" : "off platform")
           : h("span", { class: "ps" }, `${f0(it.pos[0])}, ${f0(it.pos[1])}, ${f0(it.pos[2])}`),
+        isModel ? h("input", { type: "checkbox", class: "mag", title: `Magnetic - the magnet can pick ${it.name} up`, "aria-label": `${it.name} magnetic`,
+          checked: it.obj.magnetic !== false, onchange: (ev) => this.setMagnetic(it.obj, ev.target.checked) }) : null,
         h("button", { class: "x", title: `Remove ${it.name}`, "aria-label": `Remove ${it.name}`, onclick: () => { this.removeObject(it.obj); } }, "✕")));
       }
     }
+    this.syncSelection();
     // overlays
     $("#ov-head").textContent = [this.showReach && "Reach", this.showPath && "Trail"].filter(Boolean).join(" · ");
     $("#sw-reach").classList.toggle("on", this.showReach);
@@ -1437,6 +1624,28 @@ class App {
     chip.hidden = !this.placeMode;
     if (this.placeMode) chip.textContent = `Place mode · ${this.itemLabel(this.placeItem)} · click the platform · Esc to stop`;
     $("#toasts").classList.toggle("below-chip", this.placeMode);
+  }
+  /** The position editor under the scene list. */
+  syncSelection() {
+    const b = this.selectedObject, panel = $("#sel-panel");
+    panel.hidden = !b;
+    if (!b) return;
+    const isModel = bodies.isModel(b), o = bodies.origin(b);
+    $("#sel-name").textContent = b.name + (b.held ? " · held by the magnet" : "");
+    $("#sel-mag-row").hidden = !isModel;
+    if (isModel) $("#sel-magnetic").checked = b.magnetic !== false;
+    for (const [id, v] of [["sel-x", o[0]], ["sel-y", o[1]], ["sel-z", o[2]]]) {
+      const inp = $("#" + id);
+      if (document.activeElement !== inp) inp.value = f1(v).replace(/\.0$/, "");
+      inp.disabled = !!b.held;
+    }
+    $("#sel-yaw").textContent = isModel ? `${f0(b.yaw || 0)}°` : "–";
+    $("#btn-rot-l").disabled = $("#btn-rot-r").disabled = !isModel || !!b.held;
+    $("#btn-drop").disabled = !!b.held || bodies.bottomZ(b) < 0.01;
+    $$("#sel-panel .sq[data-action=nudge]").forEach((el) => { el.disabled = !!b.held; });
+    $$("#step-seg button").forEach((el) => el.classList.toggle("on", Number(el.dataset.arg) === this.moveStep));
+    $("#sw-snap").classList.toggle("on", this.snapToSurface); $("#sw-snap").setAttribute("aria-checked", String(this.snapToSurface));
+    $("#sw-block").classList.toggle("on", this.blockOverlaps); $("#sw-block").setAttribute("aria-checked", String(this.blockOverlaps));
   }
   setHTML(sel, html) { const el = $(sel); if (el._html !== html) { el.innerHTML = html; el._html = html; } }
 }

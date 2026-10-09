@@ -3,6 +3,10 @@
 // No graphics; step(dt) is called every animation frame.
 import * as cfg from "./arm_config.js";
 import * as kin from "./kinematics.js";
+import * as bodies from "./bodies.js";
+
+export const MAGNET_RANGE_CUBE = 18.0;   // mm from the tip to the top centre of a cube / disk
+export const MAGNET_RANGE_MESH = 6.0;    // mm from the tip to the surface of an imported model
 
 export const smoothstep = (s) => { s = Math.min(1, Math.max(0, s)); return s * s * (3 - 2 * s); };
 
@@ -83,9 +87,12 @@ export class ArmController {
     this.message = "";
     this.controlStopped = false;
     this.events = [];
-    this.heldOffset = [0, 0, 0];
+    this.held = null;                 // {body, localOffset, relYaw} while the magnet carries something
+    this.getModels = () => [];        // the app plugs in its imported models here
     this.goHome(true);
   }
+  /** Everything on the Tile: cubes / disks and imported models. */
+  bodies() { return [...this.objects, ...this.getModels()]; }
 
   get toolLength() { return (cfg.TOOL_LENGTH[this.toolType] || 0) + (this.toolType === "PEN" ? this.penOffset : 0); }
   fk(q = null) { return kin.forwardKinematics(q || this.q, this.toolLength); }
@@ -204,42 +211,67 @@ export class ArmController {
   }
 
   // ------------------------------------------------------------ magnet ---
+  /** Rotation of the tool about the vertical axis (its local y axis seen from above), degrees. */
+  toolYaw(fk = this.fk()) { const r = fk.rotation; return Math.atan2(r[1][1], r[0][1]) * 180 / Math.PI; }
+  /** The body the magnet would grab right now, or null: a cube / disk whose top centre is
+   *  within 18 mm of the tip, or a magnetic model whose surface is within 6 mm of the tip
+   *  (and the tip is not below that surface). */
+  magnetCandidate(tip = this.position()) {
+    let best = null, bestScore = Infinity;
+    for (const b of this.bodies()) {
+      if (b.held) continue;
+      let score;
+      if (bodies.isModel(b)) {
+        if (!b.magnetic) continue;
+        const d = bodies.pointDistance(b, tip, MAGNET_RANGE_MESH);
+        if (d >= MAGNET_RANGE_MESH) continue;                 // the query returns the cut-off when nothing is nearer
+        const top = bodies.topUnder(b, tip);
+        if (top === null && bodies.intervals(b, tip[0], tip[1]).length) continue;   // tip is deep inside / under it
+        score = d / MAGNET_RANGE_MESH;
+      } else {
+        const d = kin.norm(kin.sub([b.pos[0], b.pos[1], b.top()], tip));
+        if (d >= MAGNET_RANGE_CUBE) continue;
+        score = d / MAGNET_RANGE_CUBE;
+      }
+      if (score < bestScore) { best = b; bestScore = score; }
+    }
+    return best;
+  }
   setMagnet(on) {
     this.magnetOn = !!on;
-    const tip = this.position();
     if (on) {
-      let best = null, bestD = 18.0;
-      for (const ob of this.objects) {
-        if (ob.held) continue;
-        const d = kin.norm(kin.sub([ob.pos[0], ob.pos[1], ob.top()], tip));
-        if (d < bestD) { best = ob; bestD = d; }
-      }
+      if (this.held) return;
+      const fk = this.fk(), tip = fk.position;
+      const best = this.magnetCandidate(tip);
       if (best) {
+        const yaw = this.toolYaw(fk);
+        const d = kin.sub(bodies.origin(best), tip);
+        const a = -yaw * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+        this.held = { body: best, localOffset: [c * d[0] - s * d[1], s * d[0] + c * d[1], d[2]], relYaw: bodies.yawOf(best) - yaw };
         best.held = true;
-        this.heldOffset = kin.sub(best.pos, tip);
         this.say(`Picked up ${best.name}`);
       }
-    } else {
-      for (const ob of this.objects) {
-        if (!ob.held) continue;
-        ob.held = false;
-        let support = 0;
-        for (const other of this.objects) {
-          if (other === ob) continue;
-          if (Math.abs(other.pos[0] - ob.pos[0]) < (other.size + ob.size) / 2 &&
-              Math.abs(other.pos[1] - ob.pos[1]) < (other.size + ob.size) / 2 && other.top() <= ob.pos[2] + 1) {
-            support = Math.max(support, other.top());
-          }
-        }
-        ob.pos[2] = support;
-        this.say(this.onPlatform(ob) ? `Dropped ${ob.name}` : `Dropped ${ob.name} off the platform`);
-      }
-    }
+    } else this.releaseHeld();
+  }
+  /** Let go of what the magnet carries: it falls onto whatever is below it. */
+  releaseHeld() {
+    const h = this.held;
+    if (!h) return null;
+    this.held = null;
+    const b = h.body;
+    b.held = false;
+    const z = bodies.dropZ(b, this.bodies(), { fromAbove: false });
+    bodies.origin(b)[2] = z;
+    this.say(this.onPlatform(b) ? `Dropped ${b.name}` : `Dropped ${b.name} off the platform`);
+    return b;
   }
   updateHeld() {
-    if (!this.magnetOn) return;
-    const tip = this.fk().position;
-    for (const ob of this.objects) if (ob.held) ob.pos = kin.add(tip, this.heldOffset);
+    const h = this.held;
+    if (!h) return;
+    const fk = this.fk(), tip = fk.position, yaw = this.toolYaw(fk);
+    const a = yaw * Math.PI / 180, c = Math.cos(a), s = Math.sin(a), o = h.localOffset;
+    bodies.setOrigin(h.body, [tip[0] + c * o[0] - s * o[1], tip[1] + s * o[0] + c * o[1], tip[2] + o[2]]);
+    if (bodies.isModel(h.body)) h.body.yaw = ((yaw + h.relYaw + 180) % 360 + 360) % 360 - 180;
   }
   addDefaultObjects() {
     // on Tile locations 27, 29 and 18 (the STEM Labs use these for the cube / disk activities)
@@ -252,7 +284,7 @@ export class ArmController {
   }
 
   // ----------------------------------------------------------- objects ---
-  onPlatform(ob) { return this.platform.contains(ob.pos[0], ob.pos[1], ob.size / 2, ob.size / 2); }
+  onPlatform(b) { const [hx, hy] = bodies.halfSize(b), o = bodies.origin(b); return this.platform.contains(o[0], o[1], hx, hy); }
   fitObjectsToPlatform() {
     const moved = [], stuck = [];
     for (const ob of this.objects) {
@@ -268,13 +300,13 @@ export class ArmController {
   removeObject(ob) {
     const i = this.objects.indexOf(ob);
     if (i < 0) return false;
-    if (ob.held) { ob.held = false; this.magnetOn = false; }
+    if (ob.held) { ob.held = false; this.held = null; this.magnetOn = false; }
     this.objects.splice(i, 1);
     this.say(`Removed ${ob.name}`);
     return true;
   }
   clearObjects() {
-    if (this.objects.some((o) => o.held)) this.magnetOn = false;
+    if (this.objects.some((o) => o.held)) { this.held = null; this.magnetOn = false; }
     this.objects = [];
     this.say("All objects removed");
   }

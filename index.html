@@ -88,6 +88,18 @@
           <button data-action="scene_load" id="btn-scene-load" title="Open a saved .json scene file">Load scene</button>
         </div>
         <div id="scene-list" role="listbox" aria-label="Scene objects"></div>
+        <div id="sel-panel" class="sel-panel" hidden aria-label="Selected object">
+          <div class="row"><span class="lbl">Selected</span><b id="sel-name" class="grow ellipsis"></b>
+            <label class="chk" id="sel-mag-row" title="The magnet can pick this model up"><input type="checkbox" id="sel-magnetic"> Magnetic</label></div>
+          <div class="row axis" data-axis="x"><label class="ax x">X</label><button class="sq" data-action="nudge" data-arg="x,-1" title="Move -X by one step">−</button><span class="field"><input id="sel-x" inputmode="decimal" aria-label="X position in mm"><i>mm</i></span><button class="sq" data-action="nudge" data-arg="x,1" title="Move +X by one step">+</button>
+            <span class="spacer"></span><label>Step</label><div class="seg step-seg" id="step-seg"><button data-action="step_size" data-arg="1">1</button><button data-action="step_size" data-arg="5">5</button><button data-action="step_size" data-arg="10">10</button><button data-action="step_size" data-arg="50">50</button></div></div>
+          <div class="row axis" data-axis="y"><label class="ax y">Y</label><button class="sq" data-action="nudge" data-arg="y,-1" title="Move -Y by one step">−</button><span class="field"><input id="sel-y" inputmode="decimal" aria-label="Y position in mm"><i>mm</i></span><button class="sq" data-action="nudge" data-arg="y,1" title="Move +Y by one step">+</button>
+            <span class="spacer"></span><label>Yaw</label><button class="sq" data-action="rotate" data-arg="-15" id="btn-rot-l" title="Turn 15° clockwise (,)">↻</button><span id="sel-yaw" class="mono val yaw">0°</span><button class="sq" data-action="rotate" data-arg="15" id="btn-rot-r" title="Turn 15° anticlockwise (.)">↺</button></div>
+          <div class="row axis" data-axis="z"><label class="ax z">Z</label><button class="sq" data-action="nudge" data-arg="z,-1" title="Lower by one step (PageDown)">−</button><span class="field"><input id="sel-z" inputmode="decimal" aria-label="Z position in mm"><i>mm</i></span><button class="sq" data-action="nudge" data-arg="z,1" title="Raise by one step (PageUp)">+</button>
+            <span class="spacer"></span><button data-action="drop" id="btn-drop" title="Let it fall onto whatever is below">Drop</button></div>
+          <div class="row"><label>Snap to surface</label><button class="switch" data-action="snap" id="sw-snap" role="switch" aria-label="Snap to surface" title="Moved objects rest on the Tile or on what is under them"></button>
+            <span class="spacer"></span><label>Block overlaps</label><button class="switch" data-action="block_overlap" id="sw-block" role="switch" aria-label="Block overlaps" title="Refuse moves that would put an object inside another (off = warn only)"></button></div>
+        </div>
       </div>
     </section>
     <section class="sec" data-sec="overlays">

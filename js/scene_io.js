@@ -6,7 +6,7 @@
 //    "platform": {"width": 638, "depth": 333}, "tool": "MAGNET", "pen_offset": 0,
 //    "toggles": {...},
 //    "objects": [{"name": "Red cube", "kind": "cube", "pos": [160, -90, 0], "size": 25, "height": 25, "color": [...]}],
-//    "models":  [{"name": "test_pallet.3mf", "file": "models/test_pallet.3mf", "scale": 1, "pos": [300, 100, 0], "color": [...]},
+//    "models":  [{"name": "test_pallet.3mf", "file": "models/test_pallet.3mf", "scale": 1, "pos": [300, 100, 0], "yaw": 0, "magnetic": true, "color": [...]},
 //                {"name": "bracket.stl", "stored": "bracket.stl", "data": "<base64, so the file works on another computer>", ...}]}
 // Undo keeps snapshots of the objects (by identity, so a removed object comes
 // back as the very same object), the models and the platform size.
@@ -23,7 +23,7 @@ export function snapshot(app) {
   const c = app.c;
   return {
     objects: c.objects.map((ob) => [ob, [...ob.pos]]),
-    models: app.models.map((m) => [m, [...m.offset]]),
+    models: app.models.map((m) => [m, [...m.offset], m.yaw || 0, m.magnetic !== false]),
     platform: [c.platform.width, c.platform.depth],
   };
 }
@@ -39,7 +39,7 @@ export function restore(app, snap) {
   for (const ob of held) if (!objs.includes(ob)) objs.push(ob);
   c.objects = objs;
   c.platform.resize(...snap.platform);
-  app.models = snap.models.map(([m, off]) => { m.offset = [...off]; return m; });
+  app.models = snap.models.map(([m, off, yaw, magnetic]) => { if (!m.held) { m.offset = [...off]; m.yaw = yaw; } m.magnetic = magnetic; return m; });
   if (app.selectedObject && !objs.includes(app.selectedObject) && !app.models.includes(app.selectedObject)) app.selectedObject = null;
 }
 
@@ -48,18 +48,24 @@ function same(a, b) {
   if (a.platform[0] !== b.platform[0] || a.platform[1] !== b.platform[1]) return false;
   if (a.objects.length !== b.objects.length || a.models.length !== b.models.length) return false;
   for (let i = 0; i < a.objects.length; i++) if (a.objects[i][0] !== b.objects[i][0] || !close(a.objects[i][1], b.objects[i][1])) return false;
-  for (let i = 0; i < a.models.length; i++) if (a.models[i][0] !== b.models[i][0] || !close(a.models[i][1], b.models[i][1])) return false;
+  for (let i = 0; i < a.models.length; i++) {
+    if (a.models[i][0] !== b.models[i][0] || !close(a.models[i][1], b.models[i][1])) return false;
+    if (Math.abs(a.models[i][2] - b.models[i][2]) > 1e-6 || a.models[i][3] !== b.models[i][3]) return false;
+  }
   return true;
 }
 
 export class SceneHistory {
   constructor() { this.undoStack = []; this.redoStack = []; this.limit = 100; }
-  /** Call BEFORE changing the scene. */
-  push(app, label) {
+  /** Call BEFORE changing the scene. With coalesceMs, repeated pushes with the same
+   *  label within that time (keyboard nudges, stepper clicks) become one undo step. */
+  push(app, label, coalesceMs = 0) {
     const snap = snapshot(app);
     const top = this.undoStack.at(-1);
     if (top && top[0] === label && same(top[1], snap)) return;
-    this.undoStack.push([label, snap]);
+    const now = Date.now();
+    if (coalesceMs && top && top[0] === label && now - (top[2] || 0) < coalesceMs) { top[2] = now; this.redoStack = []; return; }
+    this.undoStack.push([label, snap, now]);
     if (this.undoStack.length > this.limit) this.undoStack.splice(0, this.undoStack.length - this.limit);
     this.redoStack = [];
   }
@@ -89,7 +95,7 @@ export async function sceneToObject(app, { embed = false } = {}) {
   const c = app.c;
   const models = [];
   for (const m of app.models) {
-    const d = { name: m.name, scale: m.userScale, pos: m.offset.map(r2), color: m.color.slice(0, 3).map(r3) };
+    const d = { name: m.name, scale: m.userScale, pos: m.offset.map(r2), yaw: r2(m.yaw || 0), magnetic: m.magnetic !== false, color: m.color.slice(0, 3).map(r3) };
     if (m.source.library) d.file = m.source.library;
     else if (m.source.stored) d.stored = m.source.stored;
     if (embed && !m.source.library) {

@@ -1,6 +1,7 @@
 // collision.js - Collision warnings: the arm's links are capsules (segment +
 // radius), objects are axis-aligned boxes. Port of collision.py.
 import * as cfg from "./arm_config.js";
+import * as bodies from "./bodies.js";
 import { sub, add, scale, norm, dot } from "./kinematics.js";
 
 export const LINK_NAMES = { base: "base", turret: "base", upper: "upper arm", elbow: "elbow", forearm: "forearm", wrist: "wrist", tool: "tool" };
@@ -62,14 +63,35 @@ export function segmentDistance(a0, a1, b0, b1) {
   return norm(sub(add(a0, scale(d1, s)), add(b0, scale(d2, t))));
 }
 
-/** boxes: [{name, lo, hi}] -> [[link, name], ...] */
-export function armObjectHits(fk, toolType, boxes, tol = 1.0) {
+/** Distance from a capsule's axis to a body with real geometry (an imported model):
+ *  the segment is sampled every 4 mm and each sample asks the model's BVH. Stops
+ *  early once something is within `r` (that is all a hit test needs). */
+export function capsuleBodyDistance(p0, p1, body, r) {
+  const len = norm(sub(p1, p0));
+  const n = Math.max(2, Math.floor(len / 4.0) + 1);
+  let best = Infinity;
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const q = add(scale(p0, 1 - t), scale(p1, t));
+    best = Math.min(best, bodies.pointDistance(body, q, best));
+    if (best < r) return best;
+  }
+  return best;
+}
+
+/** items: [{name, lo, hi, body?}] -> [[link, name], ...]. Items with a `body` that is an
+ *  imported model are tested against their mesh; everything else against its box. */
+export function armObjectHits(fk, toolType, items, tol = 1.0) {
   const hits = [];
   const caps = armCapsules(fk, toolType);
-  for (const { name, lo, hi } of boxes) {
+  for (const { name, lo, hi, body } of items) {
     const l = lo.map((v) => v + tol), h = hi.map((v) => v - tol);
     if (h.some((v, k) => v < l[k])) continue;
-    for (const [link, p0, p1, r] of caps) if (capsuleBoxDistance(p0, p1, l, h) < r) hits.push([link, name]);
+    const mesh = body && bodies.isModel(body);
+    for (const [link, p0, p1, r] of caps) {
+      if (capsuleBoxDistance(p0, p1, l, h) >= r) continue;            // the box is a cheap first filter
+      if (!mesh || capsuleBodyDistance(p0, p1, body, r - tol) < r - tol) hits.push([link, name]);
+    }
   }
   return hits;
 }
