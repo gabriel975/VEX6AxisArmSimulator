@@ -6,6 +6,7 @@ import { chromium } from "playwright";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { asciiSTL, binarySTL, cube, production3MF, translate } from "./fixtures.mjs";
 
 const SITE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), process.env.SITE_DIR || "..");
 const URL0 = process.argv[2] || "http://localhost:8000/";
@@ -256,6 +257,179 @@ await check("import an STL from the computer (IndexedDB) and place mode", async 
   assert(Math.hypot(ob[0] - 200, ob[1] + 120) < 3, "placed at " + ob);
   await shot(page, "10_imported_models.png");
   return `stored: ${stored.join(", ")}; placed cube at ${ob.map((v) => v.toFixed(0))}`;
+});
+
+// --------------------------------------------------------------- file import routing
+const toasts = () => page.$$eval("#toasts .toast", (els) => els.map((e) => e.textContent));
+const modelNames = () => page.evaluate(() => app.models.map((m) => m.name));
+const pick = (input, name, buffer, mimeType = "application/octet-stream") => page.locator(input).setInputFiles({ name, mimeType, buffer: Buffer.from(buffer) });
+const waitModel = (prefix) => page.waitForFunction((p) => app.models.some((m) => m.name.startsWith(p)), prefix, { timeout: 15000 });
+const modelInfo = (prefix) => page.evaluate((p) => { const m = app.models.find((x) => x.name.startsWith(p)); return { name: m.name, fmt: m.fmt, size: m.size().map((v) => Math.round(v * 10) / 10), notes: m.notes, autoScale: m.autoScale, offset: m.offset.map(Math.round) }; }, prefix);
+
+await check("Scene section: 'Import model…', 'Save scene', 'Load scene' buttons and a broad model accept list", async () => {
+  const b = await page.evaluate(() => ({
+    imp: document.querySelector("#btn-import")?.textContent.trim(), impTitle: document.querySelector("#btn-import")?.title,
+    save: document.querySelector("#btn-scene-save")?.textContent.trim(), saveTitle: document.querySelector("#btn-scene-save")?.title,
+    load: document.querySelector("#btn-scene-load")?.textContent.trim(), loadTitle: document.querySelector("#btn-scene-load")?.title,
+    accept: document.querySelector("#file-model").accept,
+  }));
+  assert(b.imp === "Import model…" && /STL \/ 3MF/.test(b.impTitle), JSON.stringify(b));
+  assert(b.save === "Save scene" && b.saveTitle === "Save the platform and objects as a .json scene file", JSON.stringify(b));
+  assert(b.load === "Load scene" && b.loadTitle === "Open a saved .json scene file", JSON.stringify(b));
+  for (const t of [".stl", ".3mf", "model/stl", "model/3mf", "application/sla", "application/octet-stream"]) assert(b.accept.includes(t), "accept lacks " + t);
+  const [fc] = await Promise.all([page.waitForEvent("filechooser"), page.locator("#btn-import").click()]);
+  const id = await fc.element().getAttribute("id");
+  assert(id === "file-model", "Import model… opened #" + id);
+  const [fc2] = await Promise.all([page.waitForEvent("filechooser"), page.locator("#btn-scene-load").click()]);
+  assert((await fc2.element().getAttribute("id")) === "file-scene", "Load scene opened the wrong input");
+  await page.evaluate(() => document.querySelector("#panel").scrollTop = 0);
+  return `${b.imp} | ${b.save} | ${b.load}`;
+});
+
+await check("model picker: ASCII STL", async () => {
+  await pick("#file-model", "ascii_cube.stl", asciiSTL(cube(25)), "model/stl");
+  await waitModel("ascii_cube");
+  const m = await modelInfo("ascii_cube");
+  assert(m.fmt === "STL" && m.size.join(",") === "25,25,25", JSON.stringify(m));
+  assert(m.offset[2] === 0, "not on the floor " + m.offset);
+  return `${m.name} ${m.size.join("×")} mm at (${m.offset})`;
+});
+
+await check("model picker: binary STL whose header starts with 'solid'", async () => {
+  await pick("#file-model", "solid_header.stl", binarySTL(cube(30), "solid header from a CAD export"), "application/sla");
+  await waitModel("solid_header");
+  const m = await modelInfo("solid_header");
+  assert(m.size.join(",") === "30,30,30", JSON.stringify(m));
+  return `${m.name} ${m.size.join("×")} mm`;
+});
+
+const prod3mf = production3MF({
+  parts: [{ tris: cube(10), name: "small" }, { tris: cube(20), name: "big", componentTransform: translate(0, 0, 5) }, { tris: cube(5) }],
+  build: [{ part: 0 }, { part: 1, transform: translate(50, 0, 0) }, { part: 2, transform: translate(0, 40, 0) }],
+});
+
+await check("model picker: multi-object 3MF with the production extension (Bambu / PrusaSlicer layout)", async () => {
+  await pick("#file-model", "bambu_plate.3mf", prod3mf, "application/vnd.ms-package.3dmanufacturing-3dmodel+xml");
+  await waitModel("bambu_plate");
+  const m = await modelInfo("bambu_plate");
+  assert(m.fmt === "3MF" && m.size.join(",") === "70,45,25", JSON.stringify(m));
+  assert(m.notes.some((n) => /3 objects/.test(n)), "notes " + m.notes);
+  const toast = await page.evaluate(() => app.lastToast);
+  assert(/Added bambu_plate.*3 objects combined/.test(toast), toast);
+  return `${m.size.join("×")} mm; "${toast}"`;
+});
+
+await check("Load scene picker given an STL imports it as a model and says so", async () => {
+  const n0 = (await modelNames()).length;
+  await pick("#file-scene", "via_scene_picker.stl", fs.readFileSync(path.join(SITE, "models/test_cube.stl")), "model/stl");
+  await waitModel("via_scene_picker");
+  const t = await toasts();
+  assert((await modelNames()).length === n0 + 1, "model count");
+  assert(t.some((x) => /via_scene_picker\.stl is a 3D model, not a scene file - importing it as a model/.test(x)), "toasts: " + t.join(" | "));
+  assert(t.some((x) => /^Added via_scene_picker/.test(x)), "toasts: " + t.join(" | "));
+  return t.join(" | ");
+});
+
+await check("Load… project picker given a 3MF imports it as a model", async () => {
+  const rc = await page.evaluate(() => app.host.runCount || 0);
+  await pick("#file-project", "via_project_picker.3mf", prod3mf);
+  await waitModel("via_project_picker");
+  const m = await modelInfo("via_project_picker");
+  const t = await toasts();
+  assert(m.size.join(",") === "70,45,25", JSON.stringify(m));
+  assert(t.some((x) => /is a 3D model, not a program/.test(x)), "toasts: " + t.join(" | "));
+  assert((await page.evaluate(() => app.host.runCount || 0)) === rc, "a program was started");
+  return `${m.name} ${m.size.join("×")} mm`;
+});
+
+await check("Import model picker given a scene .json loads the scene", async () => {
+  const before = await page.evaluate(() => ({ n: app.c.objects.length + app.models.length, names: [...app.c.objects.map((o) => o.name), ...app.models.map((m) => m.name)].sort() }));
+  const json = await page.evaluate(() => app.sceneJSON());
+  await page.evaluate(() => app.clearObjects());
+  await page.waitForFunction(() => app.c.objects.length === 0 && app.models.length === 0);
+  await pick("#file-model", "my_scene.json", json, "application/json");
+  await page.waitForFunction((n) => app.c.objects.length + app.models.length === n, before.n, { timeout: 15000 });
+  const after = await page.evaluate(() => [...app.c.objects.map((o) => o.name), ...app.models.map((m) => m.name)].sort());
+  const t = await toasts();
+  assert(JSON.stringify(after) === JSON.stringify(before.names), JSON.stringify({ before: before.names, after }));
+  assert(t.some((x) => /my_scene\.json is a scene file, not a 3D model - loading it as a scene/.test(x)), "toasts: " + t.join(" | "));
+  return `${after.length} items back: ${after.join(", ")}`;
+});
+
+await check("drag and drop onto the 3D view: overlay, then a model and a program", async () => {
+  const n0 = (await modelNames()).length;
+  const rc = await page.evaluate(() => app.host.runCount || 0);
+  const src = "from cte import *\narm = Arm()\narm.move_to(160, 30, 90)\n";
+  const files = [
+    { name: "dropped.stl", type: "", bytes: [...binarySTL(cube(15))] },
+    { name: "dropped.py", type: "text/x-python", bytes: [...Buffer.from(src)] },
+  ];
+  const r = await page.evaluate(({ files }) => {
+    const dt = (window.__dt = new DataTransfer());
+    for (const f of files) dt.items.add(new File([new Uint8Array(f.bytes)], f.name, { type: f.type }));
+    const cv = document.querySelector("#c3d");
+    const ev = (type) => new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true });
+    cv.dispatchEvent(ev("dragenter"));
+    cv.dispatchEvent(ev("dragover"));
+    window.__dragTimer = setInterval(() => cv.dispatchEvent(ev("dragover")), 100);   // a real drag keeps firing dragover
+    return { overlayShown: !document.querySelector("#drop-overlay").hidden, overlayText: document.querySelector("#drop-overlay").textContent, types: [...dt.types] };
+  }, { files });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(SHOTS, "10a_drop_overlay.png") });
+  r.overlayAfterDrop = await page.evaluate(() => {
+    clearInterval(window.__dragTimer);
+    document.querySelector("#c3d").dispatchEvent(new DragEvent("drop", { dataTransfer: window.__dt, bubbles: true, cancelable: true }));
+    return !document.querySelector("#drop-overlay").hidden;
+  });
+  assert(r.overlayShown && !r.overlayAfterDrop, JSON.stringify(r));
+  assert(/Drop to open/.test(r.overlayText) && /STL/.test(r.overlayText) && /\.json/.test(r.overlayText), r.overlayText);
+  await waitModel("dropped");
+  await page.waitForFunction((n) => app.host.runCount > n && app.host.state === "finished", rc, { timeout: 60000 });
+  await waitArm(page);
+  const m = await modelInfo("dropped");
+  const p = await page.evaluate(() => app.c.position());
+  assert((await modelNames()).length === n0 + 1 && m.size.join(",") === "15,15,15", JSON.stringify(m));
+  assert(Math.hypot(p[0] - 160, p[1] - 30, p[2] - 90) < 0.1, "program did not run: " + p);
+  return `overlay "${r.overlayText.trim().replace(/\s+/g, " ")}"; ${m.name} ${m.size.join("×")} mm; program ran -> (${p.map((v) => v.toFixed(0))})`;
+});
+
+await check("a model saved in meters is scaled x1000 with a notice; a huge one is scaled down", async () => {
+  await pick("#file-model", "meters.stl", binarySTL(cube(0.025)));
+  await waitModel("meters");
+  const m = await modelInfo("meters");
+  assert(m.size.join(",") === "25,25,25" && m.autoScale === 1000, JSON.stringify(m));
+  const t1 = await page.evaluate(() => app.lastToast);
+  assert(/scaled x1000.*meters/.test(t1), t1);
+  await pick("#file-model", "huge.stl", binarySTL(cube(1200)));
+  await waitModel("huge");
+  const hm = await modelInfo("huge");
+  assert(hm.size.join(",") === "400,400,400" && Math.abs(hm.autoScale - 1 / 3) < 1e-6, JSON.stringify(hm));
+  const t2 = (await toasts()).find((x) => /^Added huge/.test(x)) || "";   // a 400 mm cube also triggers a collision toast
+  assert(/scaled down to 400 mm - the file was 1200 mm across/.test(t2), t2);
+  await page.evaluate(() => { for (const n of ["huge", "meters"]) { const m = app.models.find((x) => x.name.startsWith(n)); if (m) app.removeObject(m); } });
+  return `"${t1}" / "${t2}"`;
+});
+
+await check("unknown and broken files get a friendly error", async () => {
+  const n0 = (await modelNames()).length;
+  await pick("#file-model", "photo.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]), "image/png");
+  await page.waitForFunction(() => /Can't open photo\.png/.test(app.lastToast), null, { timeout: 5000 });
+  const t1 = await page.evaluate(() => app.lastToast);
+  assert(/models \(\.stl, \.3mf\), scenes \(\.json\) and programs/.test(t1), t1);
+  await pick("#file-model", "broken.stl", Buffer.from("this is not an stl at all, just text"), "model/stl");
+  await page.waitForFunction(() => /broken\.stl/.test(app.lastToast), null, { timeout: 5000 });
+  const t2 = await page.evaluate(() => app.lastToast);
+  assert(/Could not import broken\.stl.*not an STL/.test(t2), t2);
+  assert((await modelNames()).length === n0, "something was added");
+  await shot(page, "10b_import_errors.png");
+  return `"${t1}" / "${t2}"`;
+});
+
+await check("3MF import survives a scene save / load round trip (embedded) and the model list shows the type", async () => {
+  const row = await page.evaluate(() => { const el = [...document.querySelectorAll("#scene-list .obj")].find((e) => e.dataset.name.startsWith("bambu_plate")); return el && el.querySelector(".ty").textContent; });
+  assert(row === "3MF", "type column " + row);
+  await page.evaluate(() => { for (const m of [...app.models]) if (!/bambu_plate|my_part/.test(m.name)) app.removeObject(m); });
+  return "ok";
 });
 
 await check("drag an object, undo and redo", async () => {

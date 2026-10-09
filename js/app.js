@@ -45,7 +45,7 @@ export const HELP_SECTIONS = [
   ["Scene", [["Add model", "bundled models, your imports, cube, disk"], ["Import model…", "your own STL / 3MF file (M)"], ["Drop a file", "on the 3D view: model, scene or program"],
     ["P", "place mode: click the platform"], ["Drag", "move an object on the platform"],
     ["Ctrl+Z / Y", "undo / redo scene changes"], ["Delete", "remove the selected object"],
-    ["Save scene", "download the platform and objects as .json"], ["Load scene", "open a saved .json scene"],
+    ["Save scene", "save the platform and objects as .json"], ["Load scene", "open a saved .json scene"],
     ["N", "reset the cubes and disk"], ["C", "clear the pen drawing"]]],
   ["View", [["Mouse", "drag orbit, right-drag pan, wheel zoom"], ["Touch", "1 finger orbit, 2 fingers zoom / pan"], ["F6", "reach map on / off"],
     ["F7", "path trail on / off"], ["V", "reset the view"], ["F1", "show / hide this help"]]],
@@ -628,7 +628,11 @@ class App {
         return this.addModel({ data: buf }, file.name);
       }
       await this.library.refresh();
-      return this.addModel({ stored: key }, key);
+      const m = await this.addModel({ stored: key }, key);
+      if (!m) {                                            // unreadable file: don't keep it in the library
+        try { await this.library.removeStored(key); await this.library.refresh(); } catch { /* ignore */ }
+      }
+      return m;
     } catch (e) { this.toast(`Could not import ${file.name}: ${e.message}`, true); return null; }
   }
   addBuiltin(kind, pos = null, record = true) {
