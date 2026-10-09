@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Virtual 6-Axis Arm</title>
+<meta name="description" content="A virtual VEX CTE 6-axis robot arm that runs VEXcode Python projects in the browser.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath d='M8 25h16M12 25V19l6-8 5 3' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app">
+  <!-- code editor (left, hidden until Code / E) -->
+  <section id="editor-pane" class="card" hidden aria-label="Code editor">
+    <div class="ed-head">
+      <div class="ed-title"><span id="ed-name">untitled.ctepython</span><span id="ed-mod" class="dot-mod" hidden title="Unsaved changes">●</span><span id="ed-tag" class="tag">VEXcode CTE</span></div>
+      <button class="icon-btn" data-action="code" title="Hide the editor (E)" aria-label="Hide the editor">✕</button>
+    </div>
+    <div class="ed-tools">
+      <button data-action="editor_run" class="primary" title="Run the code (Ctrl+Enter, F5)">▶ Run</button>
+      <button data-action="editor_new" title="New CTE project">New</button>
+      <button data-action="load" title="Open a .ctepython / .py file from your computer">Open…</button>
+      <button data-action="editor_save" title="Download the code (keeps the file's format) - Ctrl+S">Save</button>
+      <button data-action="editor_export" title="Download as a VEXcode CTE .ctepython file">Export</button>
+    </div>
+    <div id="cm"></div>
+  </section>
+
+  <!-- 3D view -->
+  <main id="view">
+    <canvas id="c3d" aria-label="3D view of the arm"></canvas>
+    <div id="labels"></div>
+    <header id="topbar" class="card">
+      <span class="title">Virtual 6-Axis Arm</span>
+      <span id="chips"></span>
+      <span class="spacer"></span>
+      <button data-action="code" id="btn-code" title="Show / hide the code editor (E)">Code</button>
+      <button data-action="home" title="Go to the safe position (H)">Home</button>
+      <button data-action="import" title="Import an STL / 3MF model (M)">Import model</button>
+      <button data-action="reset_view" title="Reset the camera (V)">Reset view</button>
+    </header>
+    <div id="mode-chip" hidden></div>
+    <div id="toasts" aria-live="polite"></div>
+    <div id="py-banner" class="card" hidden></div>
+    <div id="readout" class="card"></div>
+    <button id="help-hint" class="card" data-action="help" title="Keyboard and mouse help"><b>F1</b> Help</button>
+  </main>
+
+  <!-- right panel -->
+  <aside id="panel" aria-label="Controls">
+    <section class="sec" data-sec="joints">
+      <button class="sec-head"><i class="chev"></i><span>Joints</span><em>1-6 + arrows</em></button>
+      <div class="sec-body" id="joints"></div>
+    </section>
+    <section class="sec" data-sec="tool">
+      <button class="sec-head"><i class="chev"></i><span>Tool</span><em id="tool-head"></em></button>
+      <div class="sec-body">
+        <div class="row">
+          <div class="seg" id="tool-seg"><button data-action="tool" data-arg="MAGNET">Magnet</button><button data-action="tool" data-arg="PEN">Pen</button></div>
+          <button id="btn-magnet" data-action="magnet" class="grow">Magnet off</button>
+        </div>
+        <div class="row"><label>Speed</label><div class="bar"><div id="speed-fill"></div></div>
+          <button class="sq" data-action="speed" data-arg="-10" aria-label="Slower">−</button><span id="speed-val" class="mono val">50%</span><button class="sq" data-action="speed" data-arg="10" aria-label="Faster">+</button></div>
+        <div class="row"><label>Pen drawing</label><span class="spacer"></span><span id="pen-info" class="muted small">none</span><button data-action="clear_drawing" id="btn-clear-drawing">Clear drawing</button></div>
+      </div>
+    </section>
+    <section class="sec" data-sec="platform">
+      <button class="sec-head"><i class="chev"></i><span>Platform</span><em id="plat-head"></em></button>
+      <div class="sec-body">
+        <div class="row"><label>Width (X)</label><span class="spacer"></span><button class="sq" data-action="platform_step" data-arg="w,-1" aria-label="Narrower">−</button><span class="field"><input id="plat-w" inputmode="numeric" aria-label="Platform width in mm"><i>mm</i></span><button class="sq" data-action="platform_step" data-arg="w,1" aria-label="Wider">+</button></div>
+        <div class="row"><label>Depth (Y)</label><span class="spacer"></span><button class="sq" data-action="platform_step" data-arg="d,-1" aria-label="Shallower">−</button><span class="field"><input id="plat-d" inputmode="numeric" aria-label="Platform depth in mm"><i>mm</i></span><button class="sq" data-action="platform_step" data-arg="d,1" aria-label="Deeper">+</button></div>
+        <div class="row" id="presets"></div>
+      </div>
+    </section>
+    <section class="sec" data-sec="scene">
+      <div class="sec-head-row"><button class="sec-head"><i class="chev"></i><span id="scene-title">Scene objects</span></button>
+        <button class="ghost small" data-action="objects_reset" title="Put the cubes and disk back (N)">Reset</button><button class="ghost small" data-action="objects_clear" id="btn-clear-all">Clear all</button></div>
+      <div class="sec-body">
+        <div class="row toolbar">
+          <button data-action="library" id="btn-add" class="grow">Add model <i class="chev down"></i></button>
+          <button data-action="place" id="btn-place" title="Place mode: click the platform (P)">Place</button>
+          <button data-action="scene_save" title="Download the scene as a JSON file">Save</button>
+          <button data-action="scene_load" title="Load a scene JSON file">Load</button>
+        </div>
+        <div id="scene-list" role="listbox" aria-label="Scene objects"></div>
+      </div>
+    </section>
+    <section class="sec" data-sec="overlays">
+      <button class="sec-head"><i class="chev"></i><span>Overlays &amp; collisions</span><em id="ov-head"></em></button>
+      <div class="sec-body">
+        <div class="row"><label>Reach map</label><span class="spacer"></span><span id="reach-busy" class="muted small" hidden>computing…</span><button class="switch" data-action="reach" id="sw-reach" role="switch" aria-label="Reach map"></button></div>
+        <div class="row"><label id="band-label">Band at height</label><span class="spacer"></span><button class="sq" data-action="reach_height" data-arg="-10" id="band-minus" aria-label="Lower">−</button><span id="band-val" class="mono val">100 mm</span><button class="sq" data-action="reach_height" data-arg="10" id="band-plus" aria-label="Higher">+</button><button class="switch" data-action="reach_band" id="sw-band" role="switch" aria-label="Band at height"></button></div>
+        <div class="row"><label>Path trail</label><span class="spacer"></span><button class="ghost" data-action="path_clear" id="btn-path-clear">Clear</button><button class="switch" data-action="path" id="sw-path" role="switch" aria-label="Path trail"></button></div>
+        <div class="row"><label>Stop on collision</label><span class="spacer"></span><button data-action="collide_stop" data-arg="manual" id="cs-manual" title="Jogs, sliders, Home and targets stop before a collision">Jogs</button><button data-action="collide_stop" data-arg="program" id="cs-program" title="Programs stop at a collision (otherwise they only warn)">Programs</button></div>
+      </div>
+    </section>
+    <section class="sec" data-sec="program">
+      <div class="sec-head-row"><button class="sec-head"><i class="chev"></i><span>Program</span></button>
+        <button id="tower" class="tower" data-action="tower" title="Signal Tower - click to press its button (B)"><span>Tower</span><i data-c="RED"></i><i data-c="YELLOW"></i><i data-c="GREEN"></i><i data-c="BLUE"></i><i data-c="WHITE"></i></button></div>
+      <div class="sec-body">
+        <div class="row"><b id="prog-name" class="grow ellipsis">No project loaded</b><span id="prog-pill" class="pill"><i></i><span>Idle</span></span></div>
+        <div id="prog-error" class="err" hidden></div>
+        <div class="row three">
+          <button data-action="load" title="Open a VEXcode project from your computer and run it (L)">Load…</button>
+          <button data-action="run" class="primary" id="btn-run" title="Run the code in the editor (F5)">Run</button>
+          <button data-action="stop" class="danger" id="btn-stop" title="Stop the program (Esc)">Stop</button>
+        </div>
+        <div class="row"><label for="examples">Examples</label><select id="examples" class="grow" aria-label="Class examples"><option value="">Open an example…</option></select></div>
+        <div class="row three">
+          <button data-action="pause" id="btn-pause" title="Pause / resume (Space, F8)">Pause</button>
+          <button data-action="step" data-arg="line" id="btn-step-line" title="Run one line (F10)">Step line</button>
+          <button data-action="step" data-arg="command" id="btn-step-move" title="Run to the next arm command (F11)">Step move</button>
+        </div>
+        <div class="row"><label>Sim speed</label><div class="seg grow" id="sim-seg"></div></div>
+        <div id="cur-line" class="cur-line" hidden></div>
+        <div class="sub" data-sec="brain">
+          <button class="sec-head"><i class="chev"></i><span>Brain screen</span><em id="brain-head"></em></button>
+          <div class="sec-body"><pre id="console" class="console"></pre></div>
+        </div>
+      </div>
+    </section>
+  </aside>
+</div>
+
+<!-- popups -->
+<div id="library" class="card popup" hidden role="dialog" aria-label="Add to the scene"></div>
+<div id="help" class="modal" hidden><div class="card help-card" role="dialog" aria-label="Keyboard and mouse help"></div></div>
+<div id="prompt" class="modal light" hidden><form class="card prompt-card"><label id="prompt-label"></label><input id="prompt-input" autocomplete="off" spellcheck="false"><div class="muted small">Enter to confirm · Esc to cancel</div></form></div>
+<input type="file" id="file-project" accept=".ctepython,.exppython,.v5python,.iqpython,.py,.txt" hidden>
+<input type="file" id="file-model" accept=".stl,.3mf" hidden>
+<input type="file" id="file-scene" accept=".json,application/json" hidden>
+<noscript><p style="padding:20px;font:16px sans-serif">This simulator needs JavaScript.</p></noscript>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
