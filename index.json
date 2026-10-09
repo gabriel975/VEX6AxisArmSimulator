@@ -1,0 +1,44 @@
+{
+ "examples": [
+  {
+   "file": "1.1.4 Hopscotch.ctepython",
+   "name": "1.1.4 Hopscotch",
+   "info": "magnet + threads"
+  },
+  {
+   "file": "1.1.5 Marker.ctepython",
+   "name": "1.1.5 Marker",
+   "info": "magnet + threads"
+  },
+  {
+   "file": "1.1.6 Initials.ctepython",
+   "name": "1.1.6 Initials",
+   "info": "pen + threads"
+  },
+  {
+   "file": "1.2.3.ctepython",
+   "name": "1.2.3",
+   "info": "magnet"
+  },
+  {
+   "file": "1.3.1.ctepython",
+   "name": "1.3.1",
+   "info": "magnet + threads"
+  },
+  {
+   "file": "CubesTemplate.ctepython",
+   "name": "CubesTemplate",
+   "info": "magnet"
+  },
+  {
+   "file": "Pallet.ctepython",
+   "name": "Pallet",
+   "info": "magnet"
+  },
+  {
+   "file": "PickAndPlace.ctepython",
+   "name": "PickAndPlace",
+   "info": "magnet + threads"
+  }
+ ]
+}

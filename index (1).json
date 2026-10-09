@@ -1,0 +1,10 @@
+{
+  "about": "Models listed in the 'Add model' menu. To add your own: put the .stl or .3mf file in this folder and add a line below.",
+  "models": [
+    {"file": "cube.stl", "name": "cube.stl", "info": "25 mm cube"},
+    {"file": "disk.stl", "name": "disk.stl", "info": "30 x 8 mm disk"},
+    {"file": "test_cube.stl", "name": "test_cube.stl", "info": "40 mm cube"},
+    {"file": "test_cylinder.stl", "name": "test_cylinder.stl", "info": "40 x 60 mm cylinder"},
+    {"file": "test_pallet.3mf", "name": "test_pallet.3mf", "info": "90 x 60 mm pallet"}
+  ]
+}

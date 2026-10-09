@@ -1,0 +1,9 @@
+{
+  "name": "virtual-6-axis-arm-web",
+  "private": true,
+  "type": "module",
+  "description": "Static browser version of the Virtual 6-Axis Arm simulator. No build step: serve the folder as is.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}
