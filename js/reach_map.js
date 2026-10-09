@@ -7,7 +7,7 @@ import * as cfg from "./arm_config.js";
 import * as kin from "./kinematics.js";
 
 export const R_STEP = 2.5;
-export const R_MAX = cfg.UPPER_ARM + cfg.FOREARM + 120.0;
+export const R_MAX = cfg.SHOULDER_OFFSET + cfg.UPPER_ARM + cfg.FOREARM_REACH + 120.0;
 const cache = new Map();
 
 const key = (z, tl) => `${z.toFixed(1)}|${tl.toFixed(1)}`;

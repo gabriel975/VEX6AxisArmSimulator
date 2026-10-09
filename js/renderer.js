@@ -89,14 +89,15 @@ export class Renderer {
 
   // ---------------------------------------------------------------- camera ---
   resetCamera() {
-    let az = -55, el = 26, dist = 820, center = [110, 0, 110];
+    // from the front-right of the Tile looking back at the arm in its corner (like VEX's pictures)
+    let az = 38, el = 27, dist = 800, center = [75, 60, 70];
     const p = this.app.c.platform;
     if (p) {
       const [pw, pd] = p.size;
-      const scale = Math.max(1, pw / 638, pd / 420);
-      dist = 820 * scale;
+      const scale = Math.max(1, pw / 380, pd / 380);
+      dist = 800 * scale;
       const [cx, cy] = p.center;
-      center = [110 + (cx - 100) * 0.6, cy, 110 * Math.min(scale, 1.6)];
+      center = [cx, cy - 15, 70 * Math.min(scale, 1.6)];
     }
     const a = THREE.MathUtils.degToRad(az), e = THREE.MathUtils.degToRad(el);
     const t = v3(center);
@@ -148,33 +149,66 @@ export class Renderer {
     for (const ch of [...this.floor.children]) { this.floor.remove(ch); ch.geometry?.dispose(); ch.material?.dispose(); }
     const [pw, ph] = p.size, [cx, cy] = p.center;
     const x0 = cx - pw / 2, x1 = cx + pw / 2, y0 = cy - ph / 2, y1 = cy + ph / 2;
-    const m = 120;
+    const T = cfg.TILE_THICKNESS, B = cfg.TILE_BORDER, G = cfg.TILE_GRID;
+    const m = 160;
     const tx0 = Math.min(-450, x0 - m), tx1 = Math.max(450, x1 + m), ty0 = Math.min(-450, y0 - m), ty1 = Math.max(450, y1 + m);
+    const lambert = (col) => new THREE.MeshLambertMaterial({ color: colorOf(col) });
     const plane = (xa, xb, ya, yb, z, col) => {
       const g = new THREE.PlaneGeometry(xb - xa, yb - ya).translate((xa + xb) / 2, (ya + yb) / 2, z);
-      const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: colorOf(col) }));
+      const mesh = new THREE.Mesh(g, lambert(col));
       mesh.receiveShadow = true;
       this.floor.add(mesh);
       return mesh;
     };
-    plane(tx0, tx1, ty0, ty1, -0.6, [0.80, 0.82, 0.85]);
-    plane(x0, x1, y0, y1, -0.4, [0.90, 0.92, 0.95]);
-    // grid every 50 mm (darker every 100 mm)
-    const pts = [], cols = [];
-    const gx0 = Math.ceil((tx0 + 25) / 50) * 50, gx1 = Math.floor((tx1 - 25) / 50) * 50;
-    const gy0 = Math.ceil((ty0 + 25) / 50) * 50, gy1 = Math.floor((ty1 - 25) / 50) * 50;
-    const line = (a, b, major) => {
-      pts.push(...a, ...b);
-      const c = colorOf(major ? [0.62, 0.65, 0.70] : [0.74, 0.76, 0.80]);
-      cols.push(c.r, c.g, c.b, c.r, c.g, c.b);
-    };
-    for (let v = gx0; v <= gx1; v += 50) line([v, gy0, 0], [v, gy1, 0], v % 100 === 0);
-    for (let v = gy0; v <= gy1; v += 50) line([gx0, v, 0], [gx1, v, 0], v % 100 === 0);
-    const gg = new THREE.BufferGeometry();
-    gg.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
-    gg.setAttribute("color", new THREE.Float32BufferAttribute(cols, 3));
-    this.floor.add(new THREE.LineSegments(gg, new THREE.LineBasicMaterial({ vertexColors: true })));
-    // platform outline: thin flat strips (2.5 mm) so it shows at any zoom
+    // the table, then the Tile + Frames as one 28 mm slab whose top is z = 0 (the VEXcode origin)
+    plane(tx0, tx1, ty0, ty1, -T - 0.6, [0.78, 0.80, 0.83]);
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(pw, ph, T).translate(cx, cy, -T / 2), lambert([0.84, 0.85, 0.87]));
+    slab.receiveShadow = true; slab.castShadow = true;
+    this.floor.add(slab);
+    // the numbered area inside the frame border is a touch lighter, like the real Tile
+    const gx0 = x0 + B, gx1 = x1 - B, gy0 = y0 + B, gy1 = y1 - B;
+    plane(gx0, gx1, gy0, gy1, 0.08, [0.89, 0.90, 0.92]);
+    // 50 mm squares: dotted borders, numbered like the CTE Tile (1-36 per 6 x 6 block,
+    // row by row from the back-right corner where the arm is)
+    const cellX0 = gx0, cellY0 = gy0;        // the back-right square starts at the border
+    const nx = Math.round((gx1 - gx0) / G), ny = Math.round((gy1 - gy0) / G);
+    const dpts = [];
+    for (let i = 0; i <= nx; i++) { const x = cellX0 + i * G; if (x <= gx1 + 0.5) dpts.push(x, gy0, 0.2, x, gy1, 0.2); }
+    for (let j = 0; j <= ny; j++) { const y = cellY0 + j * G; if (y <= gy1 + 0.5) dpts.push(gx0, y, 0.2, gx1, y, 0.2); }
+    const dg = new THREE.BufferGeometry();
+    dg.setAttribute("position", new THREE.Float32BufferAttribute(dpts, 3));
+    const dashed = new THREE.LineSegments(dg, new THREE.LineDashedMaterial({ color: colorOf([0.55, 0.58, 0.63]), dashSize: 2.2, gapSize: 3.6 }));
+    dashed.computeLineDistances();
+    this.floor.add(dashed);
+    // 2 x 2 hole clusters (holes 12.5 mm apart) at the corners and centres of the
+    // squares - a checkerboard of the 25 mm nodes, like the real Tile
+    const P = cfg.HOLE_PITCH, S = cfg.HOLE_SPLIT / 2;
+    const nodesX = [], nodesY = [];
+    for (let x = cellX0; x <= gx1 + 0.5; x += P) nodesX.push(x);
+    for (let y = cellY0; y <= gy1 + 0.5; y += P) nodesY.push(y);
+    const hole = new THREE.CircleGeometry(cfg.HOLE_DIAMETER / 2, 12);
+    const holes = new THREE.InstancedMesh(hole, new THREE.MeshBasicMaterial({ color: colorOf([0.50, 0.53, 0.58]) }), nodesX.length * nodesY.length * 2 + 4);
+    const mat = new THREE.Matrix4();
+    let k = 0;
+    nodesX.forEach((x, i) => nodesY.forEach((y, j) => {
+      if ((i + j) % 2) return;
+      for (const [dx, dy] of [[-S, -S], [S, -S], [-S, S], [S, S]]) holes.setMatrixAt(k++, mat.makeTranslation(x + dx, y + dy, 0.15));
+    }));
+    holes.count = k;
+    holes.instanceMatrix.needsUpdate = true;
+    this.floor.add(holes);
+    // location numbers (read from the front: text "up" points to -X)
+    const nums = new THREE.Group();
+    for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) {
+      const n = (i % cfg.TILE_CELLS) * cfg.TILE_CELLS + (j % cfg.TILE_CELLS) + 1;
+      const tex = this.numberTexture(n);
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+      mesh.position.set(cellX0 + (i + 0.5) * G, cellY0 + (j + 0.5) * G, 0.25);
+      mesh.rotation.z = Math.PI / 2;
+      nums.add(mesh);
+    }
+    this.floor.add(nums);
+    // outline of the platform edge: thin flat strips (2.5 mm) so it shows at any zoom
     const om = new THREE.MeshBasicMaterial({ color: colorOf([0.45, 0.50, 0.58]) });
     const strip = (xa, xb, ya, yb) => {
       const g = new THREE.PlaneGeometry(xb - xa, yb - ya).translate((xa + xb) / 2, (ya + yb) / 2, 0.3);
@@ -183,6 +217,25 @@ export class Renderer {
     const w = 2.5;
     strip(x0 - w / 2, x1 + w / 2, y0 - w / 2, y0 + w / 2); strip(x0 - w / 2, x1 + w / 2, y1 - w / 2, y1 + w / 2);
     strip(x0 - w / 2, x0 + w / 2, y0, y1); strip(x1 - w / 2, x1 + w / 2, y0, y1);
+  }
+
+  /** Small canvas texture with a Tile location number (cached). */
+  numberTexture(n) {
+    this._numTex = this._numTex || new Map();
+    if (this._numTex.has(n)) return this._numTex.get(n);
+    const c = document.createElement("canvas");
+    c.width = c.height = 64;
+    const ctx = c.getContext("2d");
+    ctx.clearRect(0, 0, 64, 64);
+    ctx.fillStyle = "#6b7280";
+    ctx.font = "600 40px Inter, system-ui, sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(String(n), 32, 34);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    this._numTex.set(n, tex);
+    return tex;
   }
 
   makeAxes() {
@@ -229,24 +282,39 @@ export class Renderer {
     const pts = fk.points();
     const link = (k) => (hitLinks.has(k) ? RED : C_LINK);
     const ax = (i) => kin.col(f[i], kin.AXIS_INDEX[kin.CHAIN[i][1]]);
-    this.cyl([0, 0, 0], [0, 0, 28], cfg.BASE_RADIUS, hitLinks.has("base") ? RED : C_BASE);
-    this.cyl([0, 0, 28], [0, 0, 50], 44, jointColors[0]);
+    // fixed base, as measured on the real arm: a chamfered 138 mm flange ring with 4
+    // mounting bosses, the 104 mm body, then the rotating turret under the shoulder
+    const baseCol = hitLinks.has("base") ? RED : C_BASE;
+    const fh = cfg.BASE_FLANGE_HEIGHT;
+    this.cyl([0, 0, 0], [0, 0, fh * 0.45], cfg.BASE_RADIUS, baseCol);
+    this.cyl([0, 0, fh * 0.45], [0, 0, fh], (cfg.BASE_RADIUS + cfg.BASE_BODY_RADIUS) / 2, baseCol);
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI / 4 + i * Math.PI / 2, bx = Math.cos(a) * cfg.BASE_BOLT_CIRCLE, by = Math.sin(a) * cfg.BASE_BOLT_CIRCLE;
+      this.cyl([bx, by, 0], [bx, by, fh + 2], 6.5, [0.12, 0.13, 0.15]);
+    }
+    this.cyl([0, 0, fh], [0, 0, cfg.BASE_BODY_HEIGHT], cfg.BASE_BODY_RADIUS, hitLinks.has("base") ? RED : [0.24, 0.25, 0.28]);
+    this.cyl([0, 0, cfg.BASE_BODY_HEIGHT - 3], [0, 0, cfg.BASE_BODY_HEIGHT + 3], cfg.TURRET_RADIUS + 3, jointColors[0]);
     const yawDir = kin.col(f[0], 0);
+    const turretTop = cfg.BASE_HEIGHT - 20;
+    this.cyl([0, 0, cfg.BASE_BODY_HEIGHT], [0, 0, turretTop], cfg.TURRET_RADIUS, hitLinks.has("turret") ? RED : C_LINK);
     const b = this.part(BOX);
     b.material.color.copy(colorOf([0.95, 0.95, 0.97]));
-    b.position.set(yawDir[0] * 30, yawDir[1] * 30, 50 + yawDir[2] * 30);
+    b.position.set(yawDir[0] * (cfg.TURRET_RADIUS - 8), yawDir[1] * (cfg.TURRET_RADIUS - 8), cfg.BASE_BODY_HEIGHT + 8);
     b.rotation.set(0, 0, Math.atan2(yawDir[1], yawDir[0]));
-    b.scale.set(16, 10, 6);
-    this.cyl([0, 0, 50], pts.shoulder, 28, link("base"));
+    b.scale.set(18, 10, 6);
+    // the shoulder yoke leans forward: the J2 axis is 20.5 mm in front of the J1 axis
+    this.cyl([0, 0, turretTop - 6], pts.shoulder, 30, hitLinks.has("turret") ? RED : C_LINK);
     this.housing(pts.shoulder, ax(1), 74, cfg.JOINT_RADIUS + 3, jointColors[1]);
     this.cyl(pts.shoulder, pts.elbow, cfg.LINK_RADIUS, link("upper"));
     this.housing(pts.elbow, ax(2), 62, cfg.JOINT_RADIUS, jointColors[2]);
-    const fd = kin.sub(pts.wrist, pts.elbow), fl = kin.norm(fd);
+    // the forearm tube sits 28 mm above the elbow axis: a short riser, then the tube
+    this.cyl(pts.elbow, pts.forearm, cfg.JOINT_RADIUS - 2, link("elbow"));
+    const fd = kin.sub(pts.wrist, pts.forearm), fl = kin.norm(fd);
     const fdir = kin.scale(fd, 1 / fl);
-    this.cyl(pts.elbow, pts.wrist, cfg.LINK_RADIUS - 3, link("forearm"));
-    this.cyl(kin.add(pts.elbow, kin.scale(fdir, 55)), kin.add(pts.elbow, kin.scale(fdir, 85)), cfg.LINK_RADIUS + 1, jointColors[3]);
+    this.cyl(kin.sub(pts.forearm, kin.scale(fdir, 12)), pts.wrist, cfg.LINK_RADIUS - 3, link("forearm"));
+    this.cyl(kin.add(pts.forearm, kin.scale(fdir, 50)), kin.add(pts.forearm, kin.scale(fdir, 80)), cfg.LINK_RADIUS + 1, jointColors[3]);
     const fin = kin.col(f[3], 2);
-    const f70 = kin.add(pts.elbow, kin.scale(fdir, 70));
+    const f70 = kin.add(pts.forearm, kin.scale(fdir, 65));
     this.cyl(f70, kin.add(f70, kin.scale(fin, 24)), 4, jointColors[3]);
     this.housing(pts.wrist, ax(4), 46, 14, jointColors[4]);
     const tdir = kin.col(fk.tcp, 0);

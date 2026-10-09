@@ -50,6 +50,18 @@ await check("page loads, arm renders, no console errors", async () => {
   return `${info.tris} triangles, ${info.calls} draw calls`;
 });
 
+await check("real CTE Tile: 333 x 333 mm with the arm on location 8, Workcell preset, objects on Tile locations", async () => {
+  const r = await page.evaluate(() => ({ size: app.c.platform.size, center: app.c.platform.center, bounds: app.c.platform.bounds(),
+    presets: [...document.querySelectorAll('#presets button[data-action="platform_preset"]')].map((b) => `${b.textContent}:${b.dataset.arg}`),
+    objs: app.c.objects.map((o) => `${o.name}@${o.pos.slice(0, 2)}`), shoulder: app.c.fk().points().shoulder.map((v) => +v.toFixed(1)) }));
+  assert(r.size.join("x") === "333x333" && r.center.join(",") === "75,75", JSON.stringify(r));
+  assert(r.bounds.every((v, i) => Math.abs(v - [-91.5, 241.5, -91.5, 241.5][i]) < 1e-9), "bounds " + r.bounds);
+  assert(r.presets[0] === "CTE Tile:333,333" && r.presets[1] === "Workcell:333,638", r.presets.join(" | "));
+  assert(r.objs.join(" ") === "Red cube@150,50 Blue cube@150,150 Green disk@50,200", r.objs.join(" "));
+  assert(r.shoulder.join(",") === "20.5,0,84", "shoulder " + r.shoulder);
+  return `${r.size.join("×")} mm, base at ${r.center}, shoulder (${r.shoulder}); presets ${r.presets.map((p) => p.split(":")[0]).join(", ")}`;
+});
+
 await check("joint slider drag moves J1", async () => {
   const sl = page.locator('.joint[data-joint="0"] .slider');
   const b = await sl.boundingBox();
@@ -249,12 +261,12 @@ await check("import an STL from the computer (IndexedDB) and place mode", async 
   assert(stored.includes("my_part.stl"), "not stored: " + stored);
   const n0 = await page.evaluate(() => app.c.objects.length);
   await page.keyboard.press("p");
-  const pt = await page.evaluate(() => app.renderer.project([200, -120, 0]));
+  const pt = await page.evaluate(() => app.renderer.project([210, 190, 0]));   // Tile location 35-ish, front-left of the arm
   await page.locator("#c3d").click({ position: { x: pt[0], y: pt[1] } });
   await page.waitForFunction((n) => app.c.objects.length === n + 1, n0, { timeout: 5000 });
   await page.keyboard.press("Escape");
   const ob = await page.evaluate(() => app.c.objects.at(-1).pos);
-  assert(Math.hypot(ob[0] - 200, ob[1] + 120) < 3, "placed at " + ob);
+  assert(Math.hypot(ob[0] - 210, ob[1] - 190) < 3, "placed at " + ob);
   await shot(page, "10_imported_models.png");
   return `stored: ${stored.join(", ")}; placed cube at ${ob.map((v) => v.toFixed(0))}`;
 });
@@ -504,11 +516,11 @@ await check("reach map, path trail and collision warning", async () => {
     await waitArm(page); await page.waitForTimeout(300);
     return page.evaluate(() => ({ pos: app.c.position().map(Math.round), hits: app.hits.map((h) => h.join(" > ")), toast: app.lastToast }));
   };
-  await go("200, -10, 15");
-  const stopped = await go("200, -40, 10");            // into the blue cube: "Jogs" stop is on by default
+  await go("150, 105, 15");
+  const stopped = await go("150, 135, 10");            // into the blue cube on location 29 (150, 150): "Jogs" stop is on by default
   assert(/Stopped before a collision.*Blue cube/.test(stopped.toast), "no stop: " + JSON.stringify(stopped));
   await page.locator("#cs-manual").click();             // turn the stop off -> it only warns
-  const warned = await go("200, -40, 10");
+  const warned = await go("150, 135, 10");
   assert(warned.hits.some((h) => h.includes("Blue cube")), "no warning: " + JSON.stringify(warned));
   const r = await page.evaluate(() => ({ reach: app.showReach, path: app.pathTrail.length }));
   await shot(page, "12_reach_path_collision.png");

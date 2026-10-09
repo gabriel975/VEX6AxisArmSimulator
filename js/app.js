@@ -190,7 +190,7 @@ class App {
       const inp = $("#" + id);
       const apply = () => {
         const nums = inp.value.toLowerCase().replace(/mm/g, " ").split(/[x,\s]+/).filter(Boolean).map(Number);
-        if (!nums.length || nums.some((n) => !Number.isFinite(n))) { this.toast("Error: type a size in mm, e.g. 638", true); this.syncPanel(true); return; }
+        if (!nums.length || nums.some((n) => !Number.isFinite(n))) { this.toast("Error: type a size in mm, e.g. 333", true); this.syncPanel(true); return; }
         const p = this.c.platform;
         if (nums.length >= 2) this.applyPlatform(nums[0], nums[1]);
         else if (id === "plat-w") { if (nums[0] !== p.width) this.applyPlatform(nums[0], p.depth); }
@@ -1313,7 +1313,7 @@ class App {
     const fk = c.fk(), pos = fk.position, ypr = kin.matrixToYpr(fk.rotation);
     const moving = !c.isDone();
     const cell = (l, v, u) => `<div class="cell"><span>${l}</span><b>${f1(v)}</b><i>${u}</i></div>`;
-    const reach = kin.norm(kin.sub(pos, [0, 0, cfg.BASE_HEIGHT]));
+    const reach = kin.norm(kin.sub(pos, fk.points().shoulder));
     this.setHTML("#readout", `<div class="hd"><span class="lbl">Tool position</span><span class="tag${moving ? " moving" : ""}">${moving ? "Moving" : "Idle"}</span></div>
       <div class="grid">${cell("X", pos[0], "mm")}${cell("Y", pos[1], "mm")}${cell("Z", pos[2], "mm")}${cell("Yaw", ypr[0], "°")}${cell("Roll", ypr[1], "°")}${cell("Pitch", ypr[2], "°")}</div>
       <div class="reach">Reach ${f0(reach)} of ${f0(cfg.MAX_REACH)} mm from the shoulder</div>`);

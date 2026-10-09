@@ -3,16 +3,20 @@
 import * as cfg from "./arm_config.js";
 import { sub, add, scale, norm, dot } from "./kinematics.js";
 
-export const LINK_NAMES = { base: "base", upper: "upper arm", forearm: "forearm", wrist: "wrist", tool: "tool" };
+export const LINK_NAMES = { base: "base", turret: "base", upper: "upper arm", elbow: "elbow", forearm: "forearm", wrist: "wrist", tool: "tool" };
 export const TOOL_RADIUS = { MAGNET: 9.0, PEN: 7.0, NONE: 0.0 };
-export const SELF_PAIRS = [["base", "forearm"], ["base", "wrist"], ["base", "tool"], ["upper", "wrist"], ["upper", "tool"]];
+export const SELF_PAIRS = [["base", "forearm"], ["base", "wrist"], ["base", "tool"], ["turret", "forearm"], ["turret", "wrist"], ["turret", "tool"],
+  ["upper", "wrist"], ["upper", "tool"]];
 
 export function armCapsules(fk, toolType = "MAGNET") {
   const p = fk.points();
   const caps = [
-    ["base", [0, 0, 0], [0, 0, Math.max(1, p.shoulder[2] - 20)], 40.0],
+    // the fixed base (flange + body) as a squat capsule, then the rotating turret up to the shoulder
+    ["base", [0, 0, -40], [0, 0, cfg.BASE_BODY_HEIGHT - 15], cfg.BASE_BODY_RADIUS],
+    ["turret", [0, 0, cfg.BASE_BODY_HEIGHT - 10], [0, 0, Math.max(cfg.BASE_BODY_HEIGHT, p.shoulder[2] - 24)], cfg.TURRET_RADIUS],
     ["upper", p.shoulder, p.elbow, cfg.LINK_RADIUS],
-    ["forearm", p.elbow, p.wrist, cfg.LINK_RADIUS - 3],
+    ["elbow", p.elbow, p.forearm, cfg.JOINT_RADIUS - 2],
+    ["forearm", p.forearm, p.wrist, cfg.LINK_RADIUS - 3],
     ["wrist", p.wrist, p.flange, 12.0],
   ];
   const r = TOOL_RADIUS[toolType] ?? 8.0;

@@ -48,7 +48,13 @@ export class Platform {
     return this;
   }
   get size() { return [this.width, this.depth]; }
-  get center() { const back = Math.min(cfg.PLATFORM_BACK_MARGIN, this.width / 2); return [this.width / 2 - back, 0]; }
+  /** The arm sits near the back-right corner like on the real Tile: the base centre
+   *  keeps its distance from the back (-X) and right-hand (-Y) edges, so a bigger
+   *  platform grows to the front and to the arm's left. */
+  get center() {
+    const back = Math.min(cfg.PLATFORM_BACK_MARGIN, this.width / 2), side = Math.min(cfg.PLATFORM_SIDE_MARGIN, this.depth / 2);
+    return [this.width / 2 - back, this.depth / 2 - side];
+  }
   bounds() { const [cx, cy] = this.center; return [cx - this.width / 2, cx + this.width / 2, cy - this.depth / 2, cy + this.depth / 2]; }
   contains(x, y, hx = 0, hy = 0, tol = 0.5) {
     const [x0, x1, y0, y1] = this.bounds();
@@ -236,10 +242,11 @@ export class ArmController {
     for (const ob of this.objects) if (ob.held) ob.pos = kin.add(tip, this.heldOffset);
   }
   addDefaultObjects() {
+    // on Tile locations 27, 29 and 18 (the STEM Labs use these for the cube / disk activities)
     this.objects = [
-      new SceneObject("Red cube", "cube", [160, -90, 0], { color: [0.85, 0.15, 0.15] }),
-      new SceneObject("Blue cube", "cube", [200, -40, 0], { color: [0.15, 0.35, 0.9] }),
-      new SceneObject("Green disk", "disk", [140, 110, 0], { size: 30, height: 8, color: [0.1, 0.7, 0.3] }),
+      new SceneObject("Red cube", "cube", [150, 50, 0], { color: [0.85, 0.15, 0.15] }),
+      new SceneObject("Blue cube", "cube", [150, 150, 0], { color: [0.15, 0.35, 0.9] }),
+      new SceneObject("Green disk", "disk", [50, 200, 0], { size: 30, height: 8, color: [0.1, 0.7, 0.3] }),
     ];
     this.fitObjectsToPlatform();
   }

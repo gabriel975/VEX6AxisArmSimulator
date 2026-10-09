@@ -3,15 +3,18 @@
 // Angles are DEGREES at the API, positions in mm.
 import * as cfg from "./arm_config.js";
 
-// (offset applied BEFORE the joint, rotation axis of the joint)
+// (offset applied BEFORE the joint, rotation axis of the joint). Measured on the
+// real arm [arm_config S7]: the shoulder axis sits 20.5 mm in front of the base
+// axis and the forearm tube runs 28 mm above the elbow axis.
 export const CHAIN = [
-  [[0, 0, 0], "z"],                   // J1 base yaw
-  [[0, 0, cfg.BASE_HEIGHT], "y"],     // J2 shoulder pitch
-  [[0, 0, cfg.UPPER_ARM], "y"],       // J3 elbow pitch
-  [[cfg.FOREARM, 0, 0], "x"],         // J4 wrist roll
-  [[0, 0, 0], "y"],                   // J5 wrist pitch
-  [[0, 0, 0], "x"],                   // J6 tool roll
+  [[0, 0, 0], "z"],                                    // J1 base yaw
+  [[cfg.SHOULDER_OFFSET, 0, cfg.BASE_HEIGHT], "y"],    // J2 shoulder pitch
+  [[0, 0, cfg.UPPER_ARM], "y"],                        // J3 elbow pitch
+  [[cfg.FOREARM, 0, cfg.ELBOW_OFFSET], "x"],           // J4 wrist roll (axis along the forearm tube)
+  [[0, 0, 0], "y"],                                    // J5 wrist pitch
+  [[0, 0, 0], "x"],                                    // J6 tool roll
 ];
+export const SHOULDER = [cfg.SHOULDER_OFFSET, 0, cfg.BASE_HEIGHT];   // shoulder axis at J1 = 0
 export const FLANGE_OFFSET = [cfg.WRIST_TO_FLANGE, 0, 0];
 export const AXIS_INDEX = { x: 0, y: 1, z: 2 };
 export const N_JOINTS = 6;
@@ -74,10 +77,11 @@ export class FKResult {
   constructor(frames, flange, tcp) { this.jointFrames = frames; this.flange = flange; this.tcp = tcp; }
   get position() { return pos(this.tcp); }
   get rotation() { return rot3(this.tcp); }
+  /** Key points in mm. `forearm` is where the forearm tube starts, 28 mm above the elbow axis. */
   points() {
     const f = this.jointFrames;
-    return { base: pos(f[0]), shoulder: pos(f[1]), elbow: pos(f[2]), wrist: pos(f[3]),
-             flange: pos(this.flange), tool: pos(this.tcp) };
+    return { base: pos(f[0]), shoulder: pos(f[1]), elbow: pos(f[2]), forearm: pos(mul4(f[2], trans(0, 0, cfg.ELBOW_OFFSET))),
+             wrist: pos(f[3]), flange: pos(this.flange), tool: pos(this.tcp) };
   }
 }
 
@@ -117,9 +121,8 @@ export function floorViolations(q, toolLength = cfg.TOOL_LENGTH.MAGNET) {
   return Object.keys(pts).filter((k) => pts[k][2] < cfg.FLOOR_Z - cfg.FLOOR_MARGIN);
 }
 export function selfCollision(q, toolLength = cfg.TOOL_LENGTH.MAGNET) {
-  const [radius, height] = cfg.BASE_KEEPOUT;
   const pts = forwardKinematics(q, toolLength).points();
-  return ["wrist", "flange", "tool"].filter((n) => Math.hypot(pts[n][0], pts[n][1]) < radius && pts[n][2] < height);
+  return ["wrist", "flange", "tool"].filter((n) => cfg.BASE_KEEPOUT.some(([radius, height]) => Math.hypot(pts[n][0], pts[n][1]) < radius && pts[n][2] < height));
 }
 export function poseProblems(q, toolLength = cfg.TOOL_LENGTH.MAGNET) {
   const out = [];
@@ -232,11 +235,13 @@ export function solveIK(targetXyz, opts = {}) {
   const qInit = opts.qInit || [0, 0, 0, 0, 0, 0];
   const target = [...targetXyz].map(Number);
   if (toolDir) { const n = norm(toolDir); toolDir = scale(toolDir, 1 / n); }
-  const shoulder = [0, 0, cfg.BASE_HEIGHT];
-  const reach = cfg.UPPER_ARM + cfg.FOREARM + cfg.WRIST_TO_FLANGE + toolLength;
+  // quick reject: the shoulder axis is a circle of radius SHOULDER_OFFSET around the base axis
+  const r = Math.hypot(target[0], target[1]);
+  const shoulderDist = Math.hypot(Math.max(0, r - cfg.SHOULDER_OFFSET), target[2] - cfg.BASE_HEIGHT);
+  const reach = cfg.UPPER_ARM + cfg.FOREARM_REACH + cfg.WRIST_TO_FLANGE + toolLength;
   const fail = (reason) => ({ success: false, q: clampToLimits(qInit), positionError: Infinity,
                               orientationError: 0, iterations: 0, reason, problems: [] });
-  if (norm(sub(target, shoulder)) > reach + posTol) return fail("out of reach (too far)");
+  if (shoulderDist > reach + posTol) return fail("out of reach (too far)");
   if (target[2] < cfg.FLOOR_Z - posTol) return fail("target is below the floor");
 
   const yaw = Math.hypot(target[0], target[1]) > 1 ? Math.atan2(target[1], target[0]) / DEG : 0;
