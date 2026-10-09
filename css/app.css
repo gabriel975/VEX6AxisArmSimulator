@@ -64,6 +64,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 #mode-chip { position: absolute; top: 64px; left: 12px; background: var(--accent); color: #fff; border-radius: 14px; padding: 6px 14px 6px 26px; font-weight: 600; font-size: 12px;
   max-width: calc(100% - 24px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #mode-chip::before { content: ""; position: absolute; left: 11px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: #fff; }
+#drop-overlay { position: absolute; inset: 8px; z-index: 8; display: flex; align-items: center; justify-content: center; pointer-events: none;
+  background: rgba(37, 99, 235, .08); border: 2px dashed var(--accent); border-radius: 14px; }
+.drop-card { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px 24px; color: var(--text2); }
+.drop-card b { color: var(--accent); font-size: 15px; }
+.drop-card span { font-size: 12px; }
 #toasts { position: absolute; top: 66px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; width: min(620px, calc(100% - 40px)); z-index: 5; }
 #toasts.below-chip { top: 100px; }
 .toast { background: rgba(31, 37, 48, .94); color: #fff; border-radius: 10px; padding: 8px 16px 8px 32px; position: relative; max-width: 100%; font-size: 13px;

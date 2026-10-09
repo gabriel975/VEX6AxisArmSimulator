@@ -40,6 +40,7 @@
       <button data-action="reset_view" title="Reset the camera (V)">Reset view</button>
     </header>
     <div id="mode-chip" hidden></div>
+    <div id="drop-overlay" hidden aria-hidden="true"><div class="card drop-card"><b>Drop to open</b><span>STL / 3MF models · .json scenes · .ctepython / .py programs</span></div></div>
     <div id="toasts" aria-live="polite"></div>
     <div id="py-banner" class="card" hidden></div>
     <div id="readout" class="card"></div>
@@ -78,9 +79,13 @@
       <div class="sec-body">
         <div class="row toolbar">
           <button data-action="library" id="btn-add" class="grow">Add model <i class="chev down"></i></button>
+          <button data-action="import" id="btn-import" title="Import your own STL / 3MF model from your computer (M). You can also drop files onto the 3D view">Import model…</button>
           <button data-action="place" id="btn-place" title="Place mode: click the platform (P)">Place</button>
-          <button data-action="scene_save" title="Download the scene as a JSON file">Save</button>
-          <button data-action="scene_load" title="Load a scene JSON file">Load</button>
+        </div>
+        <div class="row toolbar">
+          <label>Scene file</label><span class="spacer"></span>
+          <button data-action="scene_save" id="btn-scene-save" title="Save the platform and objects as a .json scene file">Save scene</button>
+          <button data-action="scene_load" id="btn-scene-load" title="Open a saved .json scene file">Load scene</button>
         </div>
         <div id="scene-list" role="listbox" aria-label="Scene objects"></div>
       </div>
@@ -127,7 +132,7 @@
 <div id="help" class="modal" hidden><div class="card help-card" role="dialog" aria-label="Keyboard and mouse help"></div></div>
 <div id="prompt" class="modal light" hidden><form class="card prompt-card"><label id="prompt-label"></label><input id="prompt-input" autocomplete="off" spellcheck="false"><div class="muted small">Enter to confirm · Esc to cancel</div></form></div>
 <input type="file" id="file-project" accept=".ctepython,.exppython,.v5python,.iqpython,.py,.txt" hidden>
-<input type="file" id="file-model" accept=".stl,.3mf" hidden>
+<input type="file" id="file-model" accept=".stl,.3mf,model/stl,model/3mf,application/sla,application/vnd.ms-pki.stl,application/vnd.ms-package.3dmanufacturing-3dmodel+xml,application/octet-stream" hidden>
 <input type="file" id="file-scene" accept=".json,application/json" hidden>
 <noscript><p style="padding:20px;font:16px sans-serif">This simulator needs JavaScript.</p></noscript>
 <script type="module" src="js/app.js"></script>

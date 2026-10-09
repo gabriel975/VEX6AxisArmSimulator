@@ -10,7 +10,8 @@ import { Renderer, C_HOUSING, C_SELECTED, C_LIMIT } from "./renderer.js";
 import { CodeEditor } from "./editor.js";
 import * as cte from "./ctefile.js";
 import * as sio from "./scene_io.js";
-import { ModelLibrary, toBase64, fromBase64, MODEL_EXTS } from "./model_library.js";
+import { ModelLibrary, toBase64, fromBase64 } from "./model_library.js";
+import { detectFileKind, KIND_LABEL, SUPPORTED_SUMMARY } from "./file_formats.js";
 import { AUTOSAVE, PYODIDE_URL } from "../settings.js";
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -41,8 +42,10 @@ export const HELP_SECTIONS = [
   ["Code editor", [["E", "show / hide the code editor"], ["Ctrl+Enter", "run the code (F5 too)"], ["Ctrl+S", "download (keeps the file's format)"],
     ["Ctrl+Z / Y", "undo / redo typing"], ["Export", "download a VEXcode CTE .ctepython"], ["Ctrl+C X V", "copy, cut, paste"],
     ["Tab", "indent 4 spaces (Shift = unindent)"], ["Ctrl+/", "comment lines"], ["Esc", "leave the editor (keys go to the arm)"]]],
-  ["Scene", [["Add model", "bundled models, your imports, cube, disk"], ["P", "place mode: click the platform"], ["Drag", "move an object on the platform"],
-    ["Ctrl+Z / Y", "undo / redo scene changes"], ["Delete", "remove the selected object"], ["M", "import an STL / 3MF model"],
+  ["Scene", [["Add model", "bundled models, your imports, cube, disk"], ["Import model…", "your own STL / 3MF file (M)"], ["Drop a file", "on the 3D view: model, scene or program"],
+    ["P", "place mode: click the platform"], ["Drag", "move an object on the platform"],
+    ["Ctrl+Z / Y", "undo / redo scene changes"], ["Delete", "remove the selected object"],
+    ["Save scene", "download the platform and objects as .json"], ["Load scene", "open a saved .json scene"],
     ["N", "reset the cubes and disk"], ["C", "clear the pen drawing"]]],
   ["View", [["Mouse", "drag orbit, right-drag pan, wheel zoom"], ["Touch", "1 finger orbit, 2 fingers zoom / pan"], ["F6", "reach map on / off"],
     ["F7", "path trail on / off"], ["V", "reset the view"], ["F1", "show / hide this help"]]],
@@ -216,18 +219,29 @@ class App {
       ev.target.blur();
       if (f) this.openExample(f);
     });
-    $("#file-project").addEventListener("change", (ev) => { const f = ev.target.files[0]; ev.target.value = ""; if (f) this.loadProjectFile(f); });
-    $("#file-model").addEventListener("change", (ev) => { const f = ev.target.files[0]; ev.target.value = ""; if (f) this.importModelFile(f); });
-    $("#file-scene").addEventListener("change", (ev) => { const f = ev.target.files[0]; ev.target.value = ""; if (f) this.loadSceneFile(f); });
-    window.addEventListener("dragover", (ev) => { ev.preventDefault(); });
+    // every picker is "smart": whatever file is chosen goes where it belongs (model / scene / program)
+    for (const [id, expected] of [["#file-project", "program"], ["#file-model", "model"], ["#file-scene", "scene"]]) {
+      $(id).addEventListener("change", (ev) => { const files = [...ev.target.files]; ev.target.value = ""; this.openFiles(files, expected); });
+    }
+    // drag and drop onto the page (the overlay sits over the 3D view)
+    const overlay = $("#drop-overlay");
+    const hasFiles = (ev) => [...(ev.dataTransfer?.types || [])].includes("Files");
+    const showDrop = (on) => { overlay.hidden = !on; $("#view").classList.toggle("dropping", on); };
+    window.addEventListener("dragover", (ev) => {
+      ev.preventDefault();
+      if (!hasFiles(ev)) return;
+      ev.dataTransfer.dropEffect = "copy";
+      showDrop(true);
+      clearTimeout(this._dropHide);
+      this._dropHide = setTimeout(() => showDrop(false), 400);   // dragleave is unreliable when leaving the window
+    });
+    window.addEventListener("dragenter", (ev) => { ev.preventDefault(); if (hasFiles(ev)) showDrop(true); });
     window.addEventListener("drop", (ev) => {
       ev.preventDefault();
-      const f = ev.dataTransfer?.files?.[0];
-      if (!f) return;
-      const n = f.name.toLowerCase();
-      if (MODEL_EXTS.some((e) => n.endsWith(e))) this.importModelFile(f);
-      else if (n.endsWith(".json")) this.loadSceneFile(f);
-      else this.loadProjectFile(f);
+      clearTimeout(this._dropHide);
+      showDrop(false);
+      const files = [...(ev.dataTransfer?.files || [])];
+      if (files.length) this.openFiles(files);
     });
     this.buildHelp();
     $("#help").addEventListener("click", () => this.toggleHelp(false));
@@ -574,7 +588,8 @@ class App {
       this.modelCount++;
       this.selectedObject = m;
       const s = m.size();
-      this.toast(`Added ${m.name}  (${f0(s[0])} x ${f0(s[1])} x ${f0(s[2])} mm)`, false);
+      const notes = m.notes?.length ? ` · ${m.notes.join(" · ")}` : "";
+      this.toast(`Added ${m.name}  (${f0(s[0])} x ${f0(s[1])} x ${f0(s[2])} mm)${notes}`, false);
       this.sceneChanged();
       return m;
     } catch (e) {
@@ -582,11 +597,31 @@ class App {
       return null;
     }
   }
-  async importModelFile(file) {
-    const n = file.name.toLowerCase();
-    if (!MODEL_EXTS.some((e) => n.endsWith(e))) { this.toast(`Could not import ${file.name}: only .stl and .3mf models can be imported`, true); return null; }
+  // ------------------------------------------------------------ any file ---
+  /** Files from a picker or a drop. `expected` is what the picker was for; a
+   * file of another kind is still opened the right way, with a toast saying so. */
+  async openFiles(files, expected = null) {
+    const out = [];
+    for (const f of files) out.push(await this.openFile(f, expected));
+    return out;
+  }
+  async openFile(file, expected = null) {
+    let buf;
+    try { buf = await file.arrayBuffer(); } catch (e) { this.toast(`Can't read ${file.name}: ${e.message}`, true); return null; }
+    const kind = detectFileKind(file.name, buf);
+    if (!kind) { this.toast(`Can't open ${file.name} - supported files are ${SUPPORTED_SUMMARY}`, true); return null; }
+    if (expected && kind !== expected) {
+      const doing = { model: "importing it as a model", scene: "loading it as a scene", program: "opening it as a program" }[kind];
+      this.toast(`${file.name} is ${KIND_LABEL[kind]}, not ${KIND_LABEL[expected]} - ${doing}`, false);
+    }
+    if (kind === "model") return this.importModelFile(file, buf);
+    if (kind === "scene") return this.loadSceneFile(file, buf);
+    return this.loadProjectFile(file, { buf });
+  }
+  async importModelFile(file, buf = null) {
     try {
-      const buf = await file.arrayBuffer();
+      buf = buf || await file.arrayBuffer();
+      if (detectFileKind(file.name, buf) !== "model") throw new Error("only .stl and .3mf models can be imported");
       let key;
       try { key = await this.library.store(file.name, buf); } catch (e) {
         console.warn("IndexedDB not available - the model is used for this visit only", e);
@@ -690,7 +725,7 @@ class App {
       body.append(row({ kind: "model", source: { library: "models/" + m.file }, name: nm }, nm, m.info || m.file.split(".").pop().toUpperCase(), "#0891b2"));
     }
     body.append(h("div", { class: "lbl pg" }, "Imported · kept in this browser"));
-    if (!lib.stored.length) body.append(h("div", { class: "empty" }, "Nothing imported yet - use Import file…"));
+    if (!lib.stored.length) body.append(h("div", { class: "empty" }, "Nothing imported yet - use Import model… or drop an STL / 3MF on the 3D view"));
     for (const s of lib.stored) {
       const del = h("span", { class: "del", role: "button", title: `Forget ${s.name}`, onclick: async (ev) => {
         ev.stopPropagation();
@@ -701,7 +736,7 @@ class App {
     }
     pop.append(body);
     pop.append(h("div", { class: "pf" }, h("span", { class: "muted small" }, this.placeMode ? "Pick one, then click the platform" : "Click to add · P = place mode"),
-      h("button", { "data-action": "import" }, "Import file…")));
+      h("button", { "data-action": "import", title: "Import your own STL / 3MF model from your computer" }, "Import model…")));
     const b = $("#btn-add").getBoundingClientRect();
     const w = Math.min(320, window.innerWidth - 16);
     pop.style.width = w + "px";
@@ -861,9 +896,11 @@ class App {
       this.toast("Scene downloaded as my_scene.json", false);
     } catch (e) { this.toast(`Could not save the scene: ${e.message}`, true); }
   }
-  async loadSceneFile(file) {
-    try { return await this.applyScene(sio.parseScene(await file.text()), file.name); }
-    catch (e) { this.toast(`Could not load scene ${file.name}: ${e.message}`, true); return false; }
+  async loadSceneFile(file, buf = null) {
+    try {
+      const text = buf ? new TextDecoder().decode(buf) : await file.text();
+      return await this.applyScene(sio.parseScene(text), file.name);
+    } catch (e) { this.toast(`Could not load scene ${file.name}: ${e.message}`, true); return false; }
   }
   async applyScene(d, label, { record = true, quiet = false } = {}) {
     const c = this.c;
@@ -982,8 +1019,8 @@ class App {
       return this.openProject(cte.decodeBytes(await r.arrayBuffer(), file), file, { run });
     } catch (e) { this.toast(`Can't load project: ${e.message}`, true); return false; }
   }
-  async loadProjectFile(file, { run = true } = {}) {
-    try { return this.openProject(cte.decodeBytes(await file.arrayBuffer(), file.name), file.name, { run }); }
+  async loadProjectFile(file, { run = true, buf = null } = {}) {
+    try { return this.openProject(cte.decodeBytes(buf || await file.arrayBuffer(), file.name), file.name, { run }); }
     catch (e) { this.toast(`Can't load project: ${e.message}`, true); return false; }
   }
   openProject(text, name, { run = true } = {}) {

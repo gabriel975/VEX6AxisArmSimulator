@@ -2,56 +2,23 @@
 //  * Bundled models: listed in models/index.json (files in models/).
 //  * Imported models: the file the student picks is kept in the browser's
 //    IndexedDB, so it is still there next time (like v4 copying into models/).
-// Parsing uses three.js' STLLoader / 3MFLoader; the result is one triangle
-// soup in mm, centred on (0, 0) with its lowest point at z = 0 (v4 place_on_floor).
-import * as THREE from "../vendor/three/three.module.min.js";
-import { STLLoader } from "../vendor/three/addons/STLLoader.js";
-import { ThreeMFLoader } from "../vendor/three/addons/3MFLoader.js";
-import * as fflate from "../vendor/three/addons/fflate.module.js";
+// Parsing is in file_formats.js (binary / ASCII STL, 3MF incl. the production
+// extension); the result is one triangle soup in mm, centred on (0, 0) with its
+// lowest point at z = 0 (v4 place_on_floor).
+import { parseModelBytes, extOf, MODEL_EXTS } from "./file_formats.js";
 
-export const MODEL_EXTS = [".stl", ".3mf"];
+export { MODEL_EXTS };
 export const MAX_SIZE = 400;          // mm - bigger models are scaled down (v4)
+export const TINY_SIZE = 1.5;         // mm - smaller models were probably saved in meters: scaled up x1000
 export const PALETTE = [[0.2, 0.72, 0.75], [0.95, 0.6, 0.15], [0.6, 0.4, 0.85], [0.4, 0.7, 0.3]];
-const UNITS_TO_MM = { micron: 0.001, millimeter: 1, centimeter: 10, inch: 25.4, foot: 304.8, meter: 1000 };
 
-const ext = (name) => (name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
+const ext = extOf;
 
 /** ArrayBuffer of an .stl / .3mf -> Float32Array of triangle vertices (mm). */
 export function parseModel(buffer, name) {
-  const e = ext(name);
-  let geoms = [];
-  if (e === ".stl") {
-    geoms.push(new STLLoader().parse(buffer));
-  } else if (e === ".3mf") {
-    let unit = 1;
-    try {
-      const files = fflate.unzipSync(new Uint8Array(buffer));
-      const model = Object.keys(files).find((f) => /\.model$/i.test(f));
-      if (model) {
-        const m = fflate.strFromU8(files[model]).match(/<model[^>]*\sunit="([a-z]+)"/i);
-        if (m) unit = UNITS_TO_MM[m[1].toLowerCase()] ?? 1;
-      }
-    } catch (err) { throw new Error("not a valid .3mf file (it should be a zip)"); }
-    const group = new ThreeMFLoader().parse(buffer);
-    group.updateMatrixWorld(true);
-    group.traverse((o) => {
-      if (o.isMesh) {
-        const g = o.geometry.clone().applyMatrix4(o.matrixWorld);
-        if (unit !== 1) g.scale(unit, unit, unit);
-        geoms.push(g);
-      }
-    });
-  } else {
-    throw new Error("only .stl and .3mf models can be imported");
-  }
-  let n = 0;
-  geoms = geoms.map((g) => (g.index ? g.toNonIndexed() : g));
-  for (const g of geoms) n += g.attributes.position.count;
-  if (!n) throw new Error("the file has no triangles");
-  const out = new Float32Array(n * 3);
-  let o = 0;
-  for (const g of geoms) { out.set(g.attributes.position.array.subarray(0, g.attributes.position.count * 3), o); o += g.attributes.position.count * 3; g.dispose(); }
-  return out;
+  const r = parseModelBytes(buffer, name);
+  if (!r.positions.length) throw new Error("the file has no triangles");
+  return r.positions;
 }
 
 function boundsOf(p) {
@@ -65,7 +32,7 @@ function boundsOf(p) {
 let nextId = 1;
 /** A model placed in the scene (v4 models.Mesh + its offset). */
 export class ModelItem {
-  constructor(name, fmt, positions, source, scale = 1) {
+  constructor(name, fmt, positions, source, scale = 1, notes = []) {
     this.id = "m" + nextId++;
     this.name = name;
     this.fmt = fmt;
@@ -74,17 +41,31 @@ export class ModelItem {
     this.positions = positions;
     this.color = PALETTE[0];
     this.offset = [0, 0, 0];
+    this.autoScale = 1;              // what placeOnFloor did on top of userScale
+    this.notes = [...notes];         // human readable: unit conversions, auto scaling
     this.placeOnFloor();
   }
   placeOnFloor() {
     const p = this.positions;
     if (this.userScale !== 1) for (let i = 0; i < p.length; i++) p[i] *= this.userScale;
     let [lo, hi] = boundsOf(p);
-    const biggest = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+    const size = () => Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+    let biggest = size();
+    if (!(biggest > 0)) throw new Error("the model has no size (all points are the same)");
+    if (biggest < TINY_SIZE) {                       // a 25 mm cube saved in meters is 0.025 "mm" across
+      const k = 1000;
+      for (let i = 0; i < p.length; i++) p[i] *= k;
+      [lo, hi] = boundsOf(p);
+      this.autoScale *= k;
+      this.notes.push(`scaled x1000 - the file looked like meters (it was ${biggest < 0.01 ? biggest.toExponential(1) : +biggest.toFixed(3)} mm across)`);
+      biggest = size();
+    }
     if (biggest > MAX_SIZE) {
       const k = MAX_SIZE / biggest;
       for (let i = 0; i < p.length; i++) p[i] *= k;
       [lo, hi] = boundsOf(p);
+      this.autoScale *= k;
+      this.notes.push(`scaled down to ${MAX_SIZE} mm - the file was ${Math.round(biggest)} mm across`);
     }
     const cx = (lo[0] + hi[0]) / 2, cy = (lo[1] + hi[1]) / 2, cz = lo[2];
     for (let i = 0; i < p.length; i += 3) { p[i] -= cx; p[i + 1] -= cy; p[i + 2] -= cz; }
@@ -178,8 +159,9 @@ export class ModelLibrary {
   /** Load a model ready to place (not added to the scene). */
   async load(source, name, scale = 1) {
     const buf = await this.bytes(source);
-    const positions = parseModel(buf, name);
-    return new ModelItem(name, ext(name).slice(1).toUpperCase() || "Model", positions, source, scale);
+    const r = parseModelBytes(buf, name);
+    if (!r.positions.length) throw new Error("the file has no triangles");
+    return new ModelItem(name, ext(name).slice(1).toUpperCase() || r.fmt, r.positions, source, scale, r.notes);
   }
 }
 
@@ -194,5 +176,3 @@ export function fromBase64(str) {
   for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
   return b.buffer;
 }
-
-export { THREE };
