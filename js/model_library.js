@@ -42,7 +42,7 @@ export class ModelItem {
     this.positions = positions;
     this.color = PALETTE[0];
     this.offset = [0, 0, 0];         // world position of the local origin (bottom centre), mm
-    this.yaw = 0;                    // rotation about Z, degrees
+    this.rot = [0, 0, 0];            // rotation: Euler degrees about X, Y, Z (see bodies.js)
     this.magnetic = true;            // the magnet can pick it up
     this.held = false;               // currently carried by the magnet
     this.autoScale = 1;              // what placeOnFloor did on top of userScale

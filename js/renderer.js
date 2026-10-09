@@ -5,6 +5,7 @@ import * as THREE from "../vendor/three/three.module.min.js";
 import { OrbitControls } from "../vendor/three/addons/OrbitControls.js";
 import * as cfg from "./arm_config.js";
 import * as kin from "./kinematics.js";
+import * as bodies from "./bodies.js";
 
 export const C_LINK = [0.86, 0.87, 0.89];
 export const C_HOUSING = [0.26, 0.28, 0.32];
@@ -15,6 +16,14 @@ export const C_TOOL = [0.55, 0.57, 0.6];
 const RED = [0.93, 0.2, 0.2];
 const BG = [0.93, 0.95, 0.98];
 export const GIZMO_COLORS = { x: [0.85, 0.15, 0.15], y: [0.1, 0.62, 0.2], z: [0.15, 0.35, 0.92] };
+
+/** Apply a body's rotation (bodies.js Euler convention) to a three.js object. */
+const _m4 = new THREE.Matrix4();
+function setRotation(mesh, body) {
+  const R = bodies.rotationMatrix(body);
+  _m4.set(R[0][0], R[0][1], R[0][2], 0, R[1][0], R[1][1], R[1][2], 0, R[2][0], R[2][1], R[2][2], 0, 0, 0, 0, 1);
+  mesh.quaternion.setFromRotationMatrix(_m4);
+}
 
 /** Shortest distance between a ray and a segment p0-p1 (THREE.Vector3). */
 function raySegmentDistance(ray, p0, p1) {
@@ -362,6 +371,7 @@ export class Renderer {
       }
       m.material.color.copy(colorOf(Renderer.tint(ob.color, ob === highlight)));
       m.position.set(ob.pos[0], ob.pos[1], ob.pos[2]);
+      setRotation(m, ob);
       if (ob.kind === "disk") m.scale.set(ob.size / 2, ob.size / 2, ob.height);
       else m.scale.set(ob.size, ob.size, ob.height);
     }
@@ -384,7 +394,7 @@ export class Renderer {
       if (!m.parent) this.scene.add(m);
       m.material.color.copy(colorOf(Renderer.tint(md.color, md === highlight)));
       m.position.set(...md.offset);
-      m.rotation.z = (md.yaw || 0) * Math.PI / 180;
+      setRotation(m, md);
     }
     // meshes of removed models are kept (hidden) so undo can bring them back
     for (const [md, m] of this.modelMeshes) if (!seen.has(md) && m.parent) this.scene.remove(m);
@@ -440,12 +450,41 @@ export class Renderer {
       this.gizmoArrows[axis] = { shaft, head, dir, mat, col };
     }
     this.scene.add(this.gizmo);
+    // rotate gizmo: three rings, each in the plane perpendicular to its axis
+    this.rings = new THREE.Group();
+    this.rings.visible = false;
+    this.ringMeshes = {};
+    const TORUS = new THREE.TorusGeometry(1, 0.035, 10, 64);
+    for (const [axis, dir, col] of [["x", [1, 0, 0], GIZMO_COLORS.x], ["y", [0, 1, 0], GIZMO_COLORS.y], ["z", [0, 0, 1], GIZMO_COLORS.z]]) {
+      const mat = new THREE.MeshBasicMaterial({ color: colorOf(col), depthTest: false, transparent: true, opacity: 0.95 });
+      const ring = new THREE.Mesh(TORUS, mat);
+      ring.renderOrder = 20;
+      ring.quaternion.setFromUnitVectors(Z, v3(dir));           // the torus lies in XY by default (its axis is Z)
+      this.rings.add(ring);
+      this.ringMeshes[axis] = { ring, dir, mat, col };
+    }
+    this.scene.add(this.rings);
   }
 
-  /** Show the move gizmo at a world point; `active` highlights the axis being dragged. */
-  setGizmo(center, active = null) {
-    if (!center) { this.gizmo.visible = false; this._gizmo = null; return; }
+  /** Show the move (arrows) or rotate (rings) gizmo at a world point; `active` highlights
+   *  the axis being dragged / hovered. */
+  setGizmo(center, active = null, mode = "move") {
+    if (!center) { this.gizmo.visible = this.rings.visible = false; this._gizmo = null; return; }
     const s = this.camera.position.distanceTo(v3(center)) / 800;      // constant size on screen
+    if (mode === "rotate") {
+      this.gizmo.visible = false;
+      const radius = 38 * s;
+      this.rings.position.set(...center);
+      for (const [axis, a] of Object.entries(this.ringMeshes)) {
+        a.ring.scale.setScalar(radius);
+        a.mat.color.copy(colorOf(active === axis ? C_SELECTED : a.col));
+        a.mat.opacity = active && active !== axis ? 0.3 : 0.95;
+      }
+      this.rings.visible = true;
+      this._gizmo = { center: [...center], s, mode, radius, r: 6 * s };
+      return;
+    }
+    this.rings.visible = false;
     const len = 48 * s, head = 13 * s, shaftR = 1.5 * s, headR = 4.5 * s;
     this.gizmo.position.set(...center);
     for (const [axis, a] of Object.entries(this.gizmoArrows)) {
@@ -458,20 +497,48 @@ export class Renderer {
       a.mat.opacity = active && active !== axis ? 0.35 : 0.95;
     }
     this.gizmo.visible = true;
-    this._gizmo = { center: [...center], s, len: 6 * s + len, r: 7 * s };
+    this._gizmo = { center: [...center], s, mode: "move", len: 6 * s + len, r: 7 * s };
   }
-  /** Which gizmo arrow (if any) a mouse ray touches: "x" | "y" | "z" | null */
+  /** Which gizmo handle (if any) a mouse ray touches: "x" | "y" | "z" | null */
   pickGizmo(mx, my) {
     const g = this._gizmo;
-    if (!g || !this.gizmo.visible) return null;
+    if (!g) return null;
     const ray = this.ray(mx, my);
     let best = null, bd = Infinity;
+    if (g.mode === "rotate") {
+      // distance from the ray to each ring: hit the ring's plane, then compare with the radius
+      for (const axis of ["x", "y", "z"]) {
+        const p = this.planeHit(ray, g.center, axis);
+        if (!p) continue;
+        const d = Math.abs(Math.hypot(p[0] - g.center[0], p[1] - g.center[1], p[2] - g.center[2]) - g.radius);
+        if (d < g.r && d < bd) { best = axis; bd = d; }
+      }
+      return best;
+    }
     for (const [axis, a] of Object.entries(this.gizmoArrows)) {
       const p0 = new THREE.Vector3(...g.center), p1 = p0.clone().add(v3(a.dir).multiplyScalar(g.len));
       const d = raySegmentDistance(ray, p0, p1);
       if (d < g.r && d < bd) { best = axis; bd = d; }
     }
     return best;
+  }
+  /** Where a ray meets the plane through `center` perpendicular to `axis`, or null. */
+  planeHit(ray, center, axis) {
+    const k = { x: 0, y: 1, z: 2 }[axis];
+    const dn = ray.direction.getComponent(k);
+    if (Math.abs(dn) < 1e-6) return null;
+    const t = (center[k] - ray.origin.getComponent(k)) / dn;
+    if (t <= 0) return null;
+    const p = ray.origin.clone().addScaledVector(ray.direction, t);
+    return [p.x, p.y, p.z];
+  }
+  /** Angle (degrees) of the mouse around `axis` through `center`, right-handed about the axis. */
+  ringAngle(mx, my, center, axis) {
+    const p = this.planeHit(this.ray(mx, my), center, axis);
+    if (!p) return null;
+    const d = [p[0] - center[0], p[1] - center[1], p[2] - center[2]];
+    const [u, v] = axis === "x" ? [d[1], d[2]] : axis === "y" ? [d[2], d[0]] : [d[0], d[1]];
+    return Math.atan2(v, u) * 180 / Math.PI;
   }
   /** Parameter t along the axis line (center + t * dir) closest to the mouse ray. */
   axisParam(mx, my, center, dir) {

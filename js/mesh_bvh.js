@@ -92,27 +92,84 @@ export class MeshBVH {
         }
       } else stack.push(node.left, node.right);
     }
-    out.sort((a, b) => a - b);
-    // the same edge shared by two triangles can be hit twice: merge near-duplicates
-    const merged = [];
-    for (const z of out) if (!merged.length || z - merged[merged.length - 1] > 1e-4) merged.push(z);
-    return merged;
+    return dedupe(out);
+  }
+
+  /** Parameters t of every crossing of the (unbounded) line o + t d with the mesh,
+   *  sorted ascending. d should be a unit vector so t is a distance. */
+  lineHits(o, d) {
+    const out = [];
+    if (this.root < 0) return out;
+    const inv = d.map((v) => (Math.abs(v) < 1e-12 ? Infinity : 1 / v));
+    const stack = [this.root];
+    const p = this.p;
+    while (stack.length) {
+      const node = this.nodes[stack.pop()];
+      if (!lineHitsBox(o, inv, node.lo, node.hi)) continue;
+      if (node.left < 0) {
+        for (let i = node.start; i < node.start + node.count; i++) {
+          const t = triLine(p, this.tris[i] * 9, o, d);
+          if (t !== null) out.push(t);
+        }
+      } else stack.push(node.left, node.right);
+    }
+    return dedupe(out);
   }
 
   /** Solid spans [bottom, top] at (x, y). Even-odd on a watertight mesh; otherwise one span min..max. */
-  intervals(x, y) {
-    const zs = this.verticalHits(x, y);
-    if (!zs.length) return [];
-    if (zs.length % 2) return [[zs[0], zs[zs.length - 1]]];
-    const out = [];
-    for (let i = 0; i < zs.length; i += 2) out.push([zs[i], zs[i + 1]]);
-    return out;
-  }
+  intervals(x, y) { return pairs(this.verticalHits(x, y)); }
+  /** Solid spans along the line o + t d, as [t0, t1] pairs. */
+  lineIntervals(o, d) { return pairs(this.lineHits(o, d)); }
 
   triDistance(t, p) {
     const a = t * 9;
     return pointTriangleDistance(p, this.p, a);
   }
+}
+
+/** Sort and merge near-duplicates (an edge shared by two triangles is hit twice). */
+function dedupe(vals) {
+  vals.sort((a, b) => a - b);
+  const merged = [];
+  for (const v of vals) if (!merged.length || v - merged[merged.length - 1] > 1e-4) merged.push(v);
+  return merged;
+}
+function pairs(zs) {
+  if (!zs.length) return [];
+  if (zs.length % 2) return [[zs[0], zs[zs.length - 1]]];
+  const out = [];
+  for (let i = 0; i < zs.length; i += 2) out.push([zs[i], zs[i + 1]]);
+  return out;
+}
+
+/** Does the unbounded line o + t d cross the box? (slab test without a t >= 0 limit) */
+function lineHitsBox(o, inv, lo, hi) {
+  let tmin = -Infinity, tmax = Infinity;
+  for (let k = 0; k < 3; k++) {
+    if (!Number.isFinite(inv[k])) { if (o[k] < lo[k] - 1e-6 || o[k] > hi[k] + 1e-6) return false; continue; }
+    let t0 = (lo[k] - o[k]) * inv[k], t1 = (hi[k] - o[k]) * inv[k];
+    if (t0 > t1) [t0, t1] = [t1, t0];
+    tmin = Math.max(tmin, t0); tmax = Math.min(tmax, t1);
+    if (tmin > tmax + 1e-6) return false;
+  }
+  return true;
+}
+
+/** Moller-Trumbore for the unbounded line o + t d; returns t or null. */
+function triLine(P, a, o, d) {
+  const e1x = P[a + 3] - P[a], e1y = P[a + 4] - P[a + 1], e1z = P[a + 5] - P[a + 2];
+  const e2x = P[a + 6] - P[a], e2y = P[a + 7] - P[a + 1], e2z = P[a + 8] - P[a + 2];
+  const px = d[1] * e2z - d[2] * e2y, py = d[2] * e2x - d[0] * e2z, pz = d[0] * e2y - d[1] * e2x;
+  const det = e1x * px + e1y * py + e1z * pz;
+  if (Math.abs(det) < 1e-10) return null;
+  const inv = 1 / det;
+  const tx = o[0] - P[a], ty = o[1] - P[a + 1], tz = o[2] - P[a + 2];
+  const u = (tx * px + ty * py + tz * pz) * inv;
+  if (u < -1e-6 || u > 1 + 1e-6) return null;
+  const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
+  const v = (d[0] * qx + d[1] * qy + d[2] * qz) * inv;
+  if (v < -1e-6 || u + v > 1 + 1e-6) return null;
+  return (e2x * qx + e2y * qy + e2z * qz) * inv;
 }
 
 function boxDistance(lo, hi, p) {

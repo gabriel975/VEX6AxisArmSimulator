@@ -46,7 +46,7 @@ export const HELP_SECTIONS = [
   ["Scene", [["Add model", "bundled models, your imports, cube, disk"], ["Import model…", "your own STL / 3MF file (M)"], ["Drop a file", "on the 3D view: model, scene or program"],
     ["P", "place mode: click the platform"], ["Drag", "move an object on the platform"],
     ["Arrows", "nudge the selected object in X / Y by the step"], ["PgUp / PgDn", "raise / lower it (Z) - Shift+Up / Down too"],
-    ["Gizmo", "drag a red / green / blue arrow to move along one axis"], [", .", "turn a model 15 degrees"],
+    ["Gizmo", "drag an arrow to move along one axis; R switches to rings that turn about X / Y / Z (Shift = free)"], [", .", "turn the selected object about Z by the rotation step"],
     ["Ctrl+Z / Y", "undo / redo scene changes"], ["Delete", "remove the selected object"],
     ["Save scene", "save the platform and objects as .json"], ["Load scene", "open a saved .json scene"],
     ["N", "reset the cubes and disk"], ["C", "clear the pen drawing"]]],
@@ -61,6 +61,7 @@ const PATH_TRAIL_MAX = 3000;
 const COLLAPSE_KEY = "six-axis-arm.collapsed.v1";
 const PREFS_KEY = "six-axis-arm.prefs.v1";
 const MOVE_STEPS = [1, 5, 10, 50];
+const ROT_STEPS = [1, 5, 15, 45, 90];
 const AXIS_INDEX = { x: 0, y: 1, z: 2 };
 const CODE_KEY = "six-axis-arm.code.v1";
 const OBJ_COLORS = [[0.85, 0.15, 0.15], [0.15, 0.35, 0.9], [0.1, 0.7, 0.3], [0.95, 0.75, 0.1], [0.6, 0.3, 0.8]];
@@ -72,9 +73,15 @@ class App {
     this.c.getModels = () => this.models;
     this.c.addDefaultObjects();
     this.moveStep = 10;                // mm per nudge / stepper click
+    this.rotStep = 15;                 // degrees per rotation step (gizmo rings snap to it unless Shift is held)
+    this.gizmoMode = "move";           // "move" (arrows) | "rotate" (rings)
     this.snapToSurface = true;         // moved objects rest on what is under them
     this.blockOverlaps = true;         // refuse moves into another object (false = warn)
-    try { const pr = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}"); if (MOVE_STEPS.includes(pr.moveStep)) this.moveStep = pr.moveStep; } catch { /* ignore */ }
+    try {
+      const pr = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
+      if (MOVE_STEPS.includes(pr.moveStep)) this.moveStep = pr.moveStep;
+      if (ROT_STEPS.includes(pr.rotStep)) this.rotStep = pr.rotStep;
+    } catch { /* ignore */ }
     const say = this.c.say.bind(this.c);
     this.c.say = (msg) => { say(msg); this.onSay(msg); };
     this.selected = 1;
@@ -227,6 +234,21 @@ class App {
       inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") inp.blur(); else if (ev.key === "Escape") { this.syncPanel(true); inp.blur(); } ev.stopPropagation(); });
       inp.addEventListener("blur", () => { if (inp.value.trim()) apply(); this.syncPanel(true); });
     }
+    for (const [id, axis] of [["sel-rx", 0], ["sel-ry", 1], ["sel-rz", 2]]) {
+      const inp = $("#" + id);
+      const apply = () => {
+        const b = this.selectedObject;
+        if (!b) return;
+        const v = Number(inp.value.replace(/°|deg/gi, "").trim());
+        if (!Number.isFinite(v)) { this.toast("Error: type an angle in degrees, e.g. 45", true); this.syncPanel(true); return; }
+        const next = [...bodies.rot(b)];
+        if (Math.abs(bodies.wrapDeg(v) - next[axis]) < 1e-9) { this.syncPanel(true); return; }
+        next[axis] = v;
+        this.setSelectedRotation(next, "Turn");
+      };
+      inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") inp.blur(); else if (ev.key === "Escape") { this.syncPanel(true); inp.blur(); } ev.stopPropagation(); });
+      inp.addEventListener("blur", () => { if (inp.value.trim()) apply(); this.syncPanel(true); });
+    }
     $("#sel-magnetic").addEventListener("change", (ev) => { if (this.selectedObject) this.setMagnetic(this.selectedObject, ev.target.checked); });
     // sim speed
     const seg = $("#sim-seg");
@@ -321,7 +343,8 @@ class App {
       // the move gizmo of the selected object comes first: drag an arrow = move along that axis
       const axis = this.selectedObject && !this.selectedObject.held ? this.renderer.pickGizmo(mx, my) : null;
       if (axis) {
-        if (this.startAxisDrag(this.selectedObject, axis, mx, my)) { cv.setPointerCapture(ev.pointerId); ev.stopImmediatePropagation(); }
+        const started = this.gizmoMode === "rotate" ? this.startRingDrag(this.selectedObject, axis, mx, my) : this.startAxisDrag(this.selectedObject, axis, mx, my);
+        if (started) { cv.setPointerCapture(ev.pointerId); ev.stopImmediatePropagation(); }
         return;
       }
       const obj = this.pickObjectRay(mx, my);
@@ -338,7 +361,8 @@ class App {
       const [mx, my] = pos(ev);
       if (this.drag) {
         const d = this.drag;
-        if (d.axis) { if (this.dragAxisTo(d, mx, my)) d.moved = true; }
+        if (d.ring) { if (this.dragRingTo(d, mx, my, ev.shiftKey)) d.moved = true; }
+        else if (d.axis) { if (this.dragAxisTo(d, mx, my)) d.moved = true; }
         else if (this.dragObjectTo(d.obj, mx, my, d.grab)) d.moved = true;
         ev.stopImmediatePropagation();
       } else if (this.placeMode) {
@@ -354,8 +378,13 @@ class App {
         const d = this.drag;
         this.drag = null;
         if (d.moved) {
-          if (d.axis === "z" && this.snapToSurface) this.settleBody(d.obj);     // let go in mid-air: it drops onto what is below
-          this.movedToast(d.obj, bodies.overlapping(d.obj, this.c.bodies()).map((h) => h.name), "moved to");
+          if (d.ring) {
+            if (this.snapToSurface) bodies.origin(d.obj)[2] = bodies.dropZ(d.obj, this.c.bodies(), { fromAbove: true });
+            this.rotatedToast(d.obj, bodies.overlapping(d.obj, this.c.bodies()).map((h) => h.name));
+          } else {
+            if (d.axis === "z" && this.snapToSurface) this.settleBody(d.obj);   // let go in mid-air: it drops onto what is below
+            this.movedToast(d.obj, bodies.overlapping(d.obj, this.c.bodies()).map((h) => h.name), "moved to");
+          }
           this.afterMove(d.obj);
         } else this.history.discardIfUnchanged(this);
         ev.stopImmediatePropagation();
@@ -410,7 +439,8 @@ class App {
           if (ev.shiftKey && (k === "ArrowUp" || k === "ArrowDown")) axis = "z";
           ev.preventDefault(); this.nudgeSelected(axis, sign); return;
         }
-        if (k === "," || k === ".") { ev.preventDefault(); this.rotateSelected(k === "," ? -15 : 15); return; }
+        if (k === "," || k === ".") { ev.preventDefault(); this.rotateSelectedAxis("z", k === "," ? -1 : 1); return; }
+        if (k === "r" || k === "R") { ev.preventDefault(); this.setGizmoMode(this.gizmoMode === "move" ? "rotate" : "move"); return; }
         if (k === "Escape") { this.selectedObject = null; this.syncPanel(true); }
       }
       const lk = k.length === 1 ? k.toLowerCase() : k;
@@ -506,7 +536,12 @@ class App {
       case "redo": this.redoScene(); break;
       case "nudge": { const [axis, sign] = String(arg).split(","); this.nudgeSelected(axis, Number(sign)); break; }
       case "step_size": this.setMoveStep(Number(arg)); break;
-      case "rotate": this.rotateSelected(Number(arg)); break;
+      case "rotate": this.rotateSelectedAxis("z", Math.sign(Number(arg)) || 1); break;
+      case "rotate_axis": { const [axis, sign] = String(arg).split(","); this.rotateSelectedAxis(axis, Number(sign)); break; }
+      case "rot_step": this.setRotStep(Number(arg)); break;
+      case "gizmo_mode": this.setGizmoMode(arg); break;
+      case "lay_flat": this.layFlatSelected(); break;
+      case "reset_rotation": this.setSelectedRotation([0, 0, 0], "Reset rotation"); break;
       case "drop": this.dropSelected(); break;
       case "snap": this.snapToSurface = !this.snapToSurface; this.toast(`Snap to surface ${this.snapToSurface ? "on" : "off"}`, false); this.sceneChanged(false); break;
       case "block_overlap": this.blockOverlaps = !this.blockOverlaps; this.toast(`Overlapping objects: ${this.blockOverlaps ? "blocked" : "allowed (warn only)"}`, false); this.sceneChanged(false); break;
@@ -849,7 +884,7 @@ class App {
   setMoveStep(step) {
     if (!MOVE_STEPS.includes(step)) return;
     this.moveStep = step;
-    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ moveStep: step })); } catch { /* ignore */ }
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ moveStep: step, rotStep: this.rotStep })); } catch { /* ignore */ }
     this.syncPanel(true);
   }
   /** Move the selected object by one step along an axis (keyboard / stepper). */
@@ -879,19 +914,81 @@ class App {
     this.afterMove(b);
     return true;
   }
-  rotateSelected(deg) {
+  setRotStep(step) {
+    if (!ROT_STEPS.includes(step)) return;
+    this.rotStep = step;
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ moveStep: this.moveStep, rotStep: step })); } catch { /* ignore */ }
+    this.syncPanel(true);
+  }
+  setGizmoMode(mode) {
+    this.gizmoMode = mode === "rotate" ? "rotate" : "move";
+    this.toast(this.gizmoMode === "rotate" ? "Rotate: drag a ring to turn the object (Shift = free rotation)" : "Move: drag an arrow to move along one axis", false);
+    this.syncPanel(true);
+  }
+  rotatedToast(body, blocked = []) {
+    const r = bodies.rot(body), note = blocked.length ? ` - overlaps ${blocked.slice(0, 2).join(" and ")}` : "";
+    this.toast(`${body.name} turned to (${f0(r[0])}°, ${f0(r[1])}°, ${f0(r[2])}°)${note}`, blocked.length > 0);
+  }
+  /** Set the selected object's rotation (Euler degrees about X, Y, Z). It turns about its
+   *  centre, is lifted if a corner went under the Tile, snaps to the surface below, and
+   *  obeys the overlap rule. */
+  setSelectedRotation(rotDeg, label = "Turn") {
     const b = this.selectedObject;
-    if (!b) { this.toast("Nothing selected - click a model first", true); return false; }
-    if (!bodies.isModel(b)) { this.toast(`${b.name} is a ${b.kind} - only imported models can be turned`, true); return false; }
+    if (!b) { this.toast("Nothing selected - click an object first", true); return false; }
     if (b.held) { this.toast(`Can't turn ${b.name} - the magnet is holding it`, true); return false; }
-    const old = b.yaw || 0, next = ((Math.round((old + deg) / 15) * 15 + 180) % 360 + 360) % 360 - 180;
-    this.history.push(this, `Turn ${b.name}`, 1200);
-    b.yaw = next;
-    const hits = bodies.overlapping(b, this.c.bodies());
-    if (hits.length && this.blockOverlaps) { b.yaw = old; this.history.discardIfUnchanged(this); this.blockedToast(b, hits.map((h) => h.name)); return false; }
+    const before = { rot: [...bodies.rot(b)], o: [...bodies.origin(b)] };
+    this.history.push(this, `${label} ${b.name}`, 1200);
+    bodies.setRotation(b, rotDeg);
     if (this.snapToSurface) bodies.origin(b)[2] = bodies.dropZ(b, this.c.bodies(), { fromAbove: true });
-    this.toast(`${b.name} turned to ${f0(next)}°${hits.length ? ` - overlaps ${hits.map((h) => h.name).slice(0, 2).join(" and ")}` : ""}`, hits.length > 0);
+    const hits = bodies.overlapping(b, this.c.bodies());
+    if (hits.length && this.blockOverlaps) {
+      b.rot = before.rot; bodies.setOrigin(b, before.o); bodies.invalidateSamples(b);
+      this.history.discardIfUnchanged(this); this.blockedToast(b, hits.map((h) => h.name)); this.syncPanel(true); return false;
+    }
+    if (bodies.rot(b).every((v, k) => Math.abs(v - before.rot[k]) < 1e-9) && bodies.origin(b).every((v, k) => Math.abs(v - before.o[k]) < 1e-9)) { this.history.discardIfUnchanged(this); this.syncPanel(true); return false; }
+    this.rotatedToast(b, hits.map((h) => h.name));
     this.afterMove(b);
+    return true;
+  }
+  /** Turn by one rotation step about a world axis (steppers, keys). */
+  rotateSelectedAxis(axis, sign) {
+    const b = this.selectedObject;
+    if (!b) { this.toast("Nothing selected - click an object first", true); return false; }
+    if (!"xyz".includes(axis)) return false;
+    // step one Euler component; for an object with no tilt this is a turn about the world axis
+    const next = [...bodies.rot(b)];
+    next[AXIS_INDEX[axis]] += sign * this.rotStep;
+    return this.setSelectedRotation(next, "Turn");
+  }
+  layFlatSelected() {
+    const b = this.selectedObject;
+    if (!b) { this.toast("Nothing selected - click an object first", true); return false; }
+    const r = bodies.rot(b);
+    if (Math.abs(r[0]) < 1e-9 && Math.abs(r[1]) < 1e-9) { this.toast(`${b.name} is already flat`, false); return false; }
+    return this.setSelectedRotation([0, 0, r[2]], "Lay flat");
+  }
+  startRingDrag(obj, axis, mx, my) {
+    if (obj.held) return false;
+    const center = bodies.center(obj);
+    const a0 = this.renderer.ringAngle(mx, my, center, axis);
+    if (a0 === null) return false;
+    this.history.push(this, `Turn ${obj.name}`);
+    this.drag = { obj, ring: axis, center, a0, startR: bodies.rotationMatrix(obj).map((row) => [...row]), startO: [...bodies.origin(obj)], moved: false, lastAngle: 0 };
+    return true;
+  }
+  dragRingTo(d, mx, my, free = false) {
+    const a = this.renderer.ringAngle(mx, my, d.center, d.ring);
+    if (a === null) return false;
+    let theta = a - d.a0;
+    theta = ((theta + 180) % 360 + 360) % 360 - 180;
+    if (!free) theta = Math.round(theta / this.rotStep) * this.rotStep;
+    if (theta === d.lastAngle) return false;
+    d.lastAngle = theta;
+    const b = d.obj;
+    b.rot = [...bodies.eulerFromMatrix(d.startR)]; bodies.setOrigin(b, d.startO); bodies.invalidateSamples(b);
+    bodies.setRotationMatrix(b, bodies.mul3(bodies.axisRotation(d.ring, theta), d.startR));
+    const hits = bodies.overlapping(b, this.c.bodies());
+    if (hits.length && this.blockOverlaps) { b.rot = bodies.eulerFromMatrix(d.startR); bodies.setOrigin(b, d.startO); bodies.invalidateSamples(b); return false; }
     return true;
   }
   dropSelected() {
@@ -928,7 +1025,7 @@ class App {
     const snap = this.snapToSurface && d.axis !== "z";
     return this.moveBody(d.obj, target, { snap, settle: "above" }).ok;
   }
-  gizmoCenter(obj) { const [lo, hi] = bodies.aabb(obj); return [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, hi[2] + 1]; }
+  gizmoCenter(obj) { const [lo, hi] = bodies.aabb(obj); return this.gizmoMode === "rotate" ? bodies.center(obj) : [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, hi[2] + 1]; }
   pickObjectRay(mx, my, pad = 3) {
     const ray = this.renderer.ray(mx, my);
     let best = null, bt = null;
@@ -1102,7 +1199,7 @@ class App {
       try {
         const md = await this.library.load(source, fname, Number(m.scale || 1));
         md.offset = (m.pos || [200, 0, 0]).map(Number);
-        md.yaw = Number(m.yaw || 0);
+        md.rot = Array.isArray(m.rot) && m.rot.length === 3 ? m.rot.map(Number) : [0, 0, Number(m.yaw || 0)];
         if (m.magnetic !== undefined) md.magnetic = !!m.magnetic;
         md.color = (m.color || MODEL_COLORS[this.modelCount % MODEL_COLORS.length]).map(Number);
         md.name = m.name || fname;
@@ -1111,8 +1208,12 @@ class App {
       } catch { missing.push(fname); }
     }
     if (record) this.history.push(this, `Load ${label}`);
-    const objs = (d.objects || []).map((o) => new SceneObject(String(o.name ?? "Object"), o.kind || "cube", (o.pos || [150, 0, 0]).map(Number),
-      { size: Number(o.size ?? 25), height: Number(o.height ?? 25), color: (o.color || [0.8, 0.2, 0.2]).map(Number) }));
+    const objs = (d.objects || []).map((o) => {
+      const ob = new SceneObject(String(o.name ?? "Object"), o.kind || "cube", (o.pos || [150, 0, 0]).map(Number),
+        { size: Number(o.size ?? 25), height: Number(o.height ?? 25), color: (o.color || [0.8, 0.2, 0.2]).map(Number) });
+      if (Array.isArray(o.rot) && o.rot.length === 3) ob.rot = o.rot.map(Number);
+      return ob;
+    });
     if (c.magnetOn) c.setMagnet(false);
     if (c.held) { c.held.body.held = false; c.held = null; }
     const plat = d.platform || {};
@@ -1445,7 +1546,7 @@ class App {
       const [x, y] = this.mouseFloor;
       r.setGhost({ x, y, hx, hy, h: hh, ok: c.platform.contains(x, y, hx, hy) });
     } else r.setGhost(null);
-    if (this.selectedObject && !this.selectedObject.held && !this.placeMode) r.setGizmo(this.gizmoCenter(this.selectedObject), this.drag?.axis || this.hoverAxis || null);
+    if (this.selectedObject && !this.selectedObject.held && !this.placeMode) r.setGizmo(this.gizmoCenter(this.selectedObject), this.drag?.ring || this.drag?.axis || this.hoverAxis || null, this.gizmoMode);
     else r.setGizmo(null);
     r.render();
     this.drawLabels();
@@ -1639,11 +1740,19 @@ class App {
       if (document.activeElement !== inp) inp.value = f1(v).replace(/\.0$/, "");
       inp.disabled = !!b.held;
     }
-    $("#sel-yaw").textContent = isModel ? `${f0(b.yaw || 0)}°` : "–";
-    $("#btn-rot-l").disabled = $("#btn-rot-r").disabled = !isModel || !!b.held;
+    const r = bodies.rot(b);
+    for (const [id, v] of [["sel-rx", r[0]], ["sel-ry", r[1]], ["sel-rz", r[2]]]) {
+      const inp = $("#" + id);
+      if (document.activeElement !== inp) inp.value = f1(v).replace(/\.0$/, "");
+      inp.disabled = !!b.held;
+    }
     $("#btn-drop").disabled = !!b.held || bodies.bottomZ(b) < 0.01;
-    $$("#sel-panel .sq[data-action=nudge]").forEach((el) => { el.disabled = !!b.held; });
+    $("#btn-lay-flat").disabled = !!b.held || (Math.abs(r[0]) < 1e-9 && Math.abs(r[1]) < 1e-9);
+    $("#btn-reset-rot").disabled = !!b.held || !bodies.isRotated(b);
+    $$("#sel-panel .sq[data-action=nudge], #sel-panel .sq[data-action=rotate_axis]").forEach((el) => { el.disabled = !!b.held; });
     $$("#step-seg button").forEach((el) => el.classList.toggle("on", Number(el.dataset.arg) === this.moveStep));
+    $$("#rot-step-seg button").forEach((el) => el.classList.toggle("on", Number(el.dataset.arg) === this.rotStep));
+    $$("#mode-seg button").forEach((el) => el.classList.toggle("on", el.dataset.arg === this.gizmoMode));
     $("#sw-snap").classList.toggle("on", this.snapToSurface); $("#sw-snap").setAttribute("aria-checked", String(this.snapToSurface));
     $("#sw-block").classList.toggle("on", this.blockOverlaps); $("#sw-block").setAttribute("aria-checked", String(this.blockOverlaps));
   }

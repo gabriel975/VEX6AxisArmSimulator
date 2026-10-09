@@ -492,11 +492,11 @@ await check("select an object: move gizmo + position editor; drag the Z and X ar
 
 await check("numeric editor, −/+ steppers with step sizes, keyboard nudges; never below the Tile", async () => {
   await page.locator('#step-seg [data-arg="5"]').click();
-  await page.locator('#sel-panel [data-arg="y,1"]').click();
+  await page.locator('#sel-panel [data-action="nudge"][data-arg="y,1"]').click();
   let p = await posOf("Cube 3");
   assert(p.join(",") === "190,55,40", "stepper +Y by 5: " + p);
   await page.locator('#step-seg [data-arg="50"]').click();
-  await page.locator('#sel-panel [data-arg="x,-1"]').click();
+  await page.locator('#sel-panel [data-action="nudge"][data-arg="x,-1"]').click();
   p = await posOf("Cube 3");
   assert(p.join(",") === "140,55,40", "stepper -X by 50: " + p);
   await page.locator("#sel-z").fill("-30"); await page.keyboard.press("Enter");
@@ -526,7 +526,7 @@ await check("snap to surface: stacking on another cube, falling off, Drop; block
   await page.locator("#sel-y").fill("150"); await page.keyboard.press("Enter");           // onto Cube 4 at (150, 150)
   p = await posOf("Cube 3");
   assert(p.join(",") === "150,150,25", "climbs onto Cube 4: " + p);
-  await page.locator('#sel-panel [data-arg="y,1"]').click();                              // still mostly on top
+  await page.locator('#sel-panel [data-action="nudge"][data-arg="y,1"]').click();                              // still mostly on top
   p = await posOf("Cube 3");
   assert(p.join(",") === "150,160,25", "nudged on top: " + p);
   await page.locator("#sel-y").fill("200"); await page.keyboard.press("Enter");
@@ -569,19 +569,19 @@ await check("undo / redo cover nudges (coalesced), gizmo moves and model rotatio
   await page.keyboard.press("Control+z");
   await selectBody("bambu_plate.3mf");
   await page.keyboard.press(".");
-  await page.locator("#btn-rot-r").click();
+  await page.locator('#sel-panel [data-action="rotate_axis"][data-arg="z,1"]').click();
   await page.keyboard.press(",");
-  const y1 = await page.evaluate(() => app.models.find((m) => m.name === "bambu_plate.3mf").yaw);
+  const y1 = await page.evaluate(() => app.models.find((m) => m.name === "bambu_plate.3mf").rot[2]);
   assert(y1 === 15, "yaw after . + button + , : " + y1);
   await page.waitForTimeout(1300);                                   // past the coalescing window
   await page.keyboard.press(".");
   await page.keyboard.press("Control+z");
-  const y2 = await page.evaluate(() => app.models.find((m) => m.name === "bambu_plate.3mf").yaw);
+  const y2 = await page.evaluate(() => app.models.find((m) => m.name === "bambu_plate.3mf").rot[2]);
   assert(y2 === 15, "undo the last turn: " + y2);
   const label = await page.evaluate(() => app.lastToast);
   assert(/Undo: Turn bambu_plate/.test(label), label);
-  const yawUI = await page.evaluate(() => document.querySelector("#sel-yaw").textContent);
-  assert(yawUI === "15°", "yaw shown " + yawUI);
+  const yawUI = await page.evaluate(() => document.querySelector("#sel-rz").value);
+  assert(yawUI === "15", "yaw shown " + yawUI);
   await page.evaluate(() => { app.selectedObject = null; app.syncPanel(true); });
   return `x 150 -> 180 -> 150 -> 180 -> 150; yaw 15° (${label})`;
 });
@@ -611,7 +611,7 @@ await check("magnet picks up a 3MF and an STL from their surfaces, carries them 
   await shot(page, "19_magnet_carrying_model.png");
   await page.keyboard.press("g");
   let pal = await page.evaluate(() => { const m = app.models.find((x) => x.name === "test_pallet.3mf"); return { z: m.offset[2], held: m.held, toast: app.lastToast }; });
-  assert(pal.z === 0 && !pal.held && /Dropped test_pallet/.test(pal.toast), JSON.stringify(pal));
+  assert(Math.abs(pal.z) < 1e-3 && !pal.held && /Dropped test_pallet/.test(pal.toast), JSON.stringify(pal));
   // the STL cylinder (40 x 60): grab its top centre, release it over Cube 4 -> rests on the cube
   const part = await posOf("my_part.stl");
   await go(`${part[0]}, ${part[1]}, 61`);
@@ -646,13 +646,13 @@ await check("yaw and Magnetic are kept in scene files and the browser library", 
   const json = await page.evaluate(() => app.sceneJSON());
   const d = JSON.parse(json);
   const bp = d.models.find((m) => m.name === "bambu_plate.3mf"), mp = d.models.find((m) => m.name === "my_part.stl");
-  assert(bp.yaw === 15 && bp.magnetic === false && mp.magnetic === true && d.toggles.snap_to_surface === true && d.toggles.block_overlaps === true, JSON.stringify({ bp, mp, t: d.toggles }));
+  assert(bp.rot.join(",") === "0,0,15" && bp.magnetic === false && mp.magnetic === true && d.toggles.snap_to_surface === true && d.toggles.block_overlaps === true, JSON.stringify({ bp, mp, t: d.toggles }));
   await page.waitForFunction(async () => { await app.library.refresh(); return app.library.stored.find((s) => s.key === "bambu_plate.3mf")?.magnetic === false; }, null, { timeout: 5000, polling: 100 });
   const lib = await page.evaluate(() => app.library.stored.find((s) => s.key === "bambu_plate.3mf")?.magnetic);
   await page.evaluate(() => app.clearObjects());
   await pick("#file-scene", "my_scene.json", json, "application/json");
   await page.waitForFunction((n) => app.c.objects.length + app.models.length === n, d.objects.length + d.models.length, { timeout: 15000 });
-  const back = await page.evaluate(() => { const m = app.models.find((x) => x.name === "bambu_plate.3mf"); return { yaw: m.yaw, mag: m.magnetic, snap: app.snapToSurface }; });
+  const back = await page.evaluate(() => { const m = app.models.find((x) => x.name === "bambu_plate.3mf"); return { yaw: m.rot[2], mag: m.magnetic, snap: app.snapToSurface }; });
   assert(back.yaw === 15 && back.mag === false && back.snap, JSON.stringify(back));
   // library default: re-adding bambu_plate gives a non-magnetic model; restore it afterwards
   const again = await page.evaluate(async () => { const m = await app.library.load({ stored: "bambu_plate.3mf" }, "bambu_plate.3mf"); return m.magnetic; });
@@ -660,7 +660,92 @@ await check("yaw and Magnetic are kept in scene files and the browser library", 
   await page.evaluate(async () => { const m = app.models.find((x) => x.name === "bambu_plate.3mf"); app.setMagnetic(m, true); await app.library.setStoredMagnetic("bambu_plate.3mf", true); });
   // tidy up for the checks that follow: only the two imports and Cube 1 / Cube 2 stay
   await page.evaluate(() => { for (const b of [...app.c.objects, ...app.models]) if (/Cube [34]|test_pallet/.test(b.name)) app.removeObject(b); app.selectedObject = null; app.syncPanel(true); });
-  return `scene: yaw ${bp.yaw}, magnetic ${bp.magnetic}; library default ${lib}; reloaded ${JSON.stringify(back)}`;
+  return `scene: rot ${bp.rot}, magnetic ${bp.magnetic}; library default ${lib}; reloaded ${JSON.stringify(back)}`;
+});
+
+await check("rotate mode (R): rings turn a cube / disk / model about X, Y, Z with snapping; fields, steppers, Lay flat, Reset", async () => {
+  await page.evaluate(() => { app.clearObjects(); app.resetObjects(); });        // Red cube (150,50), Blue cube (150,150), Green disk (50,200)
+  await page.locator("#c3d").click({ position: { x: 40, y: 400 } });
+  await selectBody("Green disk");
+  await page.keyboard.press("r");
+  await page.waitForFunction(() => app.gizmoMode === "rotate" && app.renderer.rings.visible, null, { timeout: 5000 });
+  const modeUI = await page.evaluate(() => document.querySelector("#mode-seg .on")?.dataset.arg);
+  assert(modeUI === "rotate", "mode segment " + modeUI);
+  // drag the X ring from its 45 deg point to its 135 deg point -> +90 deg about X (snapped to 15): the disk stands on its rim
+  const box = await canvasBox();
+  const ringPts = await page.evaluate(() => {
+    const [lo, hi] = app.objectBounds(app.selectedObject), c = lo.map((v, k) => (v + hi[k]) / 2), R = app.renderer._gizmo.radius;
+    const at = (deg) => { const a = deg * Math.PI / 180; return [c[0], c[1] + R * Math.cos(a), c[2] + R * Math.sin(a)]; };
+    return { a: app.renderer.project(at(45)), b: app.renderer.project(at(135)) };
+  });
+  await page.mouse.move(box.x + ringPts.a[0], box.y + ringPts.a[1]);
+  await page.waitForTimeout(80);
+  const hover = await page.evaluate(() => app.hoverAxis);
+  await page.mouse.down();
+  await page.mouse.move(box.x + ringPts.b[0], box.y + ringPts.b[1], { steps: 12 });
+  await page.mouse.up();
+  let d = await page.evaluate(() => { const o = app.c.objects.find((x) => x.name === "Green disk"); const [lo, hi] = app.objectBounds(o); return { rot: o.rot.map(Math.round), lo: lo.map((v) => +v.toFixed(2)), size: hi.map((v, k) => +(v - lo[k]).toFixed(1)), toast: app.lastToast }; });
+  assert(hover === "x" && d.rot.join(",") === "90,0,0", `X ring drag: hover ${hover}, rot ${d.rot}, ${d.toast}`);
+  assert(d.lo[2] === 0 && d.size.join(",") === "30,8,30", `disk on its rim, lifted onto the Tile: ${JSON.stringify(d)}`);
+  await shot(page, "20_rotate_rings.png");
+  // steppers and fields: 15 deg steps about Z, typed value about Y, snap step 45
+  await page.locator('#sel-panel [data-action="rotate_axis"][data-arg="z,1"]').click();
+  await page.locator('#sel-panel [data-action="rotate_axis"][data-arg="z,1"]').click();
+  d = await page.evaluate(() => app.c.objects.find((x) => x.name === "Green disk").rot.map(Math.round));
+  assert(d.join(",") === "90,0,30", "two Z steps: " + d);
+  await page.locator('#rot-step-seg [data-arg="45"]').click();
+  await page.locator('#sel-panel [data-action="rotate_axis"][data-arg="y,-1"]').click();
+  d = await page.evaluate(() => app.c.objects.find((x) => x.name === "Green disk").rot.map(Math.round));
+  assert(d.join(",") === "90,-45,30", "Y step of 45: " + d);
+  await page.locator("#sel-rz").fill("120"); await page.keyboard.press("Enter");
+  d = await page.evaluate(() => app.c.objects.find((x) => x.name === "Green disk").rot.map(Math.round));
+  assert(d.join(",") === "90,-45,120", "typed Z 120: " + d);
+  const bottom = await page.evaluate(() => Math.round(app.objectBounds(app.c.objects.find((x) => x.name === "Green disk"))[0][2] * 1000) / 1000);
+  assert(bottom === 0, "still not below the Tile: " + bottom);
+  await page.locator("#btn-lay-flat").click();
+  d = await page.evaluate(() => app.c.objects.find((x) => x.name === "Green disk").rot.map(Math.round));
+  assert(d.join(",") === "0,0,120", "Lay flat keeps the turn about Z: " + d);
+  await page.keyboard.press("Control+z");
+  d = await page.evaluate(() => app.c.objects.find((x) => x.name === "Green disk").rot.map(Math.round));
+  assert(d.join(",") === "90,-45,120", "undo Lay flat: " + d);
+  await page.locator("#btn-reset-rot").click();
+  d = await page.evaluate(() => app.c.objects.find((x) => x.name === "Green disk").rot.map(Math.round));
+  assert(d.join(",") === "0,0,0", "Reset: " + d);
+  await page.locator('#rot-step-seg [data-arg="15"]').click();
+  // a cube tilted 45 about X stands on an edge; snap to surface puts it onto the other cube by that edge
+  await selectBody("Red cube");
+  await page.locator("#sel-rx").fill("45"); await page.keyboard.press("Enter");
+  await page.locator("#sel-y").fill("150"); await page.keyboard.press("Enter");
+  const cube = await page.evaluate(() => { const o = app.c.objects.find((x) => x.name === "Red cube"); const [lo, hi] = app.objectBounds(o); return { rot: o.rot.map(Math.round), bottom: +lo[2].toFixed(3), h: +(hi[2] - lo[2]).toFixed(2) }; });
+  assert(cube.rot.join(",") === "45,0,0" && cube.bottom === 25 && Math.abs(cube.h - 35.36) < 0.05, "tilted cube rests edge-down on the Blue cube: " + JSON.stringify(cube));
+  // a model: the bundled pallet rolled onto its side with the Y ring is 60 mm tall and 14 wide
+  await page.evaluate(async () => { await app.addModel({ library: "models/test_pallet.3mf" }, "test_pallet.3mf", { pos: [60, 100] }); });
+  await selectBody("test_pallet.3mf");
+  await page.locator("#sel-rx").fill("90"); await page.keyboard.press("Enter");
+  const pal = await page.evaluate(() => { const m = app.models.find((x) => x.name === "test_pallet.3mf"); const [lo, hi] = m.worldBounds(); return { rot: m.rot.map(Math.round), size: hi.map((v, k) => Math.round(v - lo[k])), bottom: +lo[2].toFixed(3) }; });
+  assert(pal.rot.join(",") === "90,0,0" && pal.size.join(",") === "90,14,60" && pal.bottom === 0, JSON.stringify(pal));
+  // the magnet grabs the side-lying pallet by its top edge, carries it, and it lands upright-as-carried (still on its side)
+  const c = await page.evaluate(() => { const m = app.models.find((x) => x.name === "test_pallet.3mf"); const [lo, hi] = m.worldBounds(); return [(lo[0] + hi[0]) / 2, hi[1] - 3, hi[2] + 1]; });
+  await go(`${c.map((v) => v.toFixed(1)).join(", ")}`);
+  await page.keyboard.press("g");
+  const held = await page.evaluate(() => app.c.held?.body?.name);
+  assert(held === "test_pallet.3mf", "held " + held);
+  await go("200, 100, 120");
+  await page.keyboard.press("g");
+  const after = await page.evaluate(() => { const m = app.models.find((x) => x.name === "test_pallet.3mf"); const [lo, hi] = m.worldBounds(); return { rot: m.rot.map((v) => Math.round(v)), size: hi.map((v, k) => Math.round(v - lo[k])), bottom: +lo[2].toFixed(2), held: m.held }; });
+  assert(!after.held && after.bottom === 0 && after.size[2] === 60 && after.rot[0] === 90 && after.rot[1] === 0, "put down on its side again (turned with the tool about Z): " + JSON.stringify(after));
+  // all of it survives a scene round trip
+  const json = await page.evaluate(() => app.sceneJSON());
+  const sd = JSON.parse(json);
+  assert(sd.objects.find((o) => o.name === "Red cube").rot.join(",") === "45,0,0" && Math.round(sd.models.find((m) => m.name === "test_pallet.3mf").rot[0]) === 90, "rot in the scene file");
+  await page.evaluate(() => app.clearObjects());
+  await pick("#file-scene", "rot_scene.json", json, "application/json");
+  await page.waitForFunction((n) => app.c.objects.length + app.models.length === n, sd.objects.length + sd.models.length, { timeout: 15000 });
+  const back = await page.evaluate(() => ({ cube: app.c.objects.find((x) => x.name === "Red cube").rot.map(Math.round), pal: app.models.find((x) => x.name === "test_pallet.3mf").rot.map(Math.round) }));
+  assert(back.cube.join(",") === "45,0,0" && back.pal[0] === 90, "rot after reload: " + JSON.stringify(back));
+  await page.keyboard.press("r");
+  await page.evaluate(() => { app.removeObject(app.models.find((x) => x.name === "test_pallet.3mf")); app.clearObjects(); app.resetObjects(); app.selectedObject = null; app.syncPanel(true); });
+  return `disk ${d} after Reset; tilted cube edge-down at 25; pallet on its side ${pal.size.join("×")}; carried on its side and reloaded`;
 });
 
 await check("drag an object, undo and redo", async () => {

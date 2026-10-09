@@ -87,7 +87,7 @@ export function armObjectHits(fk, toolType, items, tol = 1.0) {
   for (const { name, lo, hi, body } of items) {
     const l = lo.map((v) => v + tol), h = hi.map((v) => v - tol);
     if (h.some((v, k) => v < l[k])) continue;
-    const mesh = body && bodies.isModel(body);
+    const mesh = body && (bodies.isModel(body) || bodies.isRotated(body));   // boxes stay boxes while they are upright
     for (const [link, p0, p1, r] of caps) {
       if (capsuleBoxDistance(p0, p1, l, h) >= r) continue;            // the box is a cheap first filter
       if (!mesh || capsuleBodyDistance(p0, p1, body, r - tol) < r - tol) hits.push([link, name]);

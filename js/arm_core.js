@@ -37,6 +37,7 @@ export class SceneObject {
     this.pos = [...pos];         // centre of the bottom face, mm
     this.size = size;            // cube edge / disk diameter
     this.height = height;
+    this.rot = [0, 0, 0];        // rotation: Euler degrees about X, Y, Z (see bodies.js)
     this.color = [...color];
     this.held = false;
   }
@@ -229,7 +230,9 @@ export class ArmController {
         if (top === null && bodies.intervals(b, tip[0], tip[1]).length) continue;   // tip is deep inside / under it
         score = d / MAGNET_RANGE_MESH;
       } else {
-        const d = kin.norm(kin.sub([b.pos[0], b.pos[1], b.top()], tip));
+        // the top centre of the (possibly rotated) cube / disk: its local top-face centre in the world
+        const topCentre = bodies.localToWorld(b, [0, 0, b.height]);
+        const d = kin.norm(kin.sub(topCentre, tip));
         if (d >= MAGNET_RANGE_CUBE) continue;
         score = d / MAGNET_RANGE_CUBE;
       }
@@ -244,10 +247,9 @@ export class ArmController {
       const fk = this.fk(), tip = fk.position;
       const best = this.magnetCandidate(tip);
       if (best) {
-        const yaw = this.toolYaw(fk);
-        const d = kin.sub(bodies.origin(best), tip);
-        const a = -yaw * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
-        this.held = { body: best, localOffset: [c * d[0] - s * d[1], s * d[0] + c * d[1], d[2]], relYaw: bodies.yawOf(best) - yaw };
+        // rigid attachment: remember the body's pose in the tool frame
+        const Rt = bodies.transpose3(fk.rotation);
+        this.held = { body: best, localOffset: bodies.apply3(Rt, kin.sub(bodies.origin(best), tip)), relR: bodies.mul3(Rt, bodies.rotationMatrix(best)) };
         best.held = true;
         this.say(`Picked up ${best.name}`);
       }
@@ -260,18 +262,21 @@ export class ArmController {
     this.held = null;
     const b = h.body;
     b.held = false;
+    if (bodies.bottomZ(b) < 0) bodies.setBottomZ(b, 0);
     const z = bodies.dropZ(b, this.bodies(), { fromAbove: false });
     bodies.origin(b)[2] = z;
+    bodies.invalidateSamples(b);
     this.say(this.onPlatform(b) ? `Dropped ${b.name}` : `Dropped ${b.name} off the platform`);
     return b;
   }
   updateHeld() {
     const h = this.held;
     if (!h) return;
-    const fk = this.fk(), tip = fk.position, yaw = this.toolYaw(fk);
-    const a = yaw * Math.PI / 180, c = Math.cos(a), s = Math.sin(a), o = h.localOffset;
-    bodies.setOrigin(h.body, [tip[0] + c * o[0] - s * o[1], tip[1] + s * o[0] + c * o[1], tip[2] + o[2]]);
-    if (bodies.isModel(h.body)) h.body.yaw = ((yaw + h.relYaw + 180) % 360 + 360) % 360 - 180;
+    const fk = this.fk(), tip = fk.position, R = fk.rotation;
+    const d = bodies.apply3(R, h.localOffset);
+    bodies.setOrigin(h.body, [tip[0] + d[0], tip[1] + d[1], tip[2] + d[2]]);
+    h.body.rot = bodies.eulerFromMatrix(bodies.mul3(R, h.relR));
+    bodies.invalidateSamples(h.body);
   }
   addDefaultObjects() {
     // on Tile locations 27, 29 and 18 (the STEM Labs use these for the cube / disk activities)

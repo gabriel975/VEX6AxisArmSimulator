@@ -184,7 +184,13 @@ select { height: 28px; border: 1px solid var(--border); border-radius: 8px; back
 .sel-panel { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 4px; }
 .sel-panel .row { margin: 4px 0; }
 .sel-panel .lbl { margin-right: 2px; }
-.sel-panel .ax { font-weight: 600; width: 12px; }
+.sel-panel .ax { font-weight: 600; width: 12px; white-space: nowrap; }
+.sel-panel .rot .ax { width: 26px; font-size: 12px; }
+.sel-panel .rot .field { width: 66px; }
+.sel-panel .rot { border-top: 1px dashed var(--border); padding-top: 4px; }
+.sel-panel .rot + .rot { border-top: none; padding-top: 0; }
+.mode-seg { height: 26px; padding: 2px; width: 130px; }
+.mode-seg button { height: 20px; }
 .sel-panel .ax.x { color: #c81e1e; } .sel-panel .ax.y { color: #1e8c28; } .sel-panel .ax.z { color: #1e46dc; }
 .sel-panel .field { width: 80px; }
 .sel-panel .yaw { min-width: 40px; }

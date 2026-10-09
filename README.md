@@ -119,18 +119,28 @@ The first time someone presses **Run**, the app downloads Python for the browser
   embedded). The scene is also autosaved in the browser.
 - **Moving an object precisely**: click an object and a **move gizmo** appears - drag the
   red (X), green (Y) or blue (Z) arrow to move along that axis only. The *Selected* panel
-  under the list has **X / Y / Z fields** (type a value in mm), **−/+ steppers** with a
-  **Step** of 1, 5, 10 or 50 mm, and **Yaw** buttons that turn an imported model in 15°
-  steps (also `,` and `.`). Keyboard: **arrow keys** nudge in X / Y, **PageUp / PageDown**
+  under the list has **X / Y / Z fields** (type a value in mm) and **−/+ steppers** with a
+  **Step** of 1, 5, 10 or 50 mm. Keyboard: **arrow keys** nudge in X / Y, **PageUp / PageDown**
   (or Shift+Up / Down) in Z - the arrows go back to jogging the joint when nothing is
   selected (Esc deselects). Objects can be raised and **stacked** on cubes, pallets or any
   model, and never go below the Tile. With **Snap to surface** on, a moved object rests on
   whatever is under it (drag a cube over a pallet and it climbs in); **Drop** lets a raised
   object fall. **Block overlaps** refuses moves that would put an object inside another
   (switch it off to just get a warning).
-- **Imported models behave like their shape**: collisions between the arm and an STL / 3MF
-  use the real triangles (a BVH), so the tool can reach into a pallet's slots without a
-  false alarm and is stopped by its walls. Every imported model has a **Magnetic**
+- **Rotating an object** (cubes, the disk and imported models alike): press **R** or pick
+  **Rotate** in the panel and the gizmo becomes three rings - drag the red / green / blue
+  ring to turn about X / Y / Z, snapped to the **Snap** step (1, 5, 15, 45 or 90°; hold
+  Shift for free rotation). The panel also has **↻X / ↻Y / ↻Z** fields in degrees with
+  −/+ steppers (`,` and `.` turn about Z), **Lay flat** (removes the tilt, keeps the turn
+  about Z) and **Reset**. An object turns about its own centre; if a corner would end up
+  under the Tile it is lifted, and with Snap on it settles on whatever is below - a disk
+  stood on its rim, a cube tilted onto an edge or a pallet rolled onto its side all rest
+  correctly, collide with the arm as their real shape, and the magnet grabs them by their
+  actual top and keeps their orientation while carrying (the object tilts with the tool).
+  Rotation is kept in scene files and in undo / redo.
+- **Objects behave like their shape**: collisions between the arm and an STL / 3MF use the
+  real triangles (a BVH), so the tool can reach into a pallet's slots without a false alarm
+  and is stopped by its walls; rotated cubes and disks are checked the same way. Every imported model has a **Magnetic**
   checkbox (on by default, remembered in scene files and in the browser library): the
   magnet picks it up when the tool tip is within a few millimetres of its surface, carries
   it rigidly (it turns with the tool), and on release it settles on the Tile, a cube or
@@ -216,8 +226,9 @@ tool-down, as in VEX's lesson picture, and the whole Tile is green on the reach 
 
 ## 7. Tests (optional, for developers)
 
-- `node --test tests/*.test.mjs` - the mesh BVH, stacking / snap / overlap rules, mesh-based arm
-  collisions and the magnet carrying models (`tests/bodies.test.mjs`); kinematics, IK, reach map and collision results compared with
+- `node --test tests/*.test.mjs` - the mesh BVH, stacking / snap / overlap rules, rotation of every
+  object type, mesh-based arm collisions and the magnet carrying (possibly tilted) objects
+  (`tests/bodies.test.mjs`); kinematics, IK, reach map and collision results compared with
   `tests/kinematics_fixtures.json` (a regression snapshot made by `node tests/gen_fixtures.mjs`;
   regenerate it when `js/arm_config.js` changes), the byte-identical `.ctepython` export
   round trip for the 8 examples, and the model file readers (binary / ASCII STL, 3MF with the
@@ -227,8 +238,8 @@ tool-down, as in VEX's lesson picture, and the whole Tile is green on the reach 
 - `python tests/test_simrt.py` - the Python program runner (`python/simrt.py`) in normal
   CPython: the 8 examples, Stop, errors with line numbers, threads, wait().
 - `tests/e2e_browser.mjs` - Playwright browser test (UI, all 8 samples, export, models,
-  scenes, the move gizmo / position editor / keyboard nudges, stacking, overlaps, mesh
-  collisions, the magnet with models, undo / redo, layout). See the comment at the top of
+  scenes, the move / rotate gizmo, position and rotation editor, keyboard nudges, stacking,
+  overlaps, mesh collisions, the magnet with models, undo / redo, layout). See the comment at the top of
   the file for how to run it.
 
 ## Credits and licenses
