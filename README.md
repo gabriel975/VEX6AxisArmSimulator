@@ -1,8 +1,8 @@
 # Virtual 6-Axis Arm (web version)
 
 A virtual VEX CTE 6-axis robot arm that runs in any modern browser. Students can
-load the VEXcode Python projects from class (`.ctepython`), run them on a 3D arm,
-step through them line by line, edit the code, and export it back to VEXcode.
+load their VEXcode Python projects (`.ctepython`), run them on a 3D arm, step through
+them line by line, edit the code, and export it back to VEXcode.
 
 Nothing to install, nothing to build. It is a plain static website, so it can be
 hosted free on **GitHub Pages** (or Netlify, Cloudflare Pages, or any web server).
@@ -97,12 +97,26 @@ The first time someone presses **Run**, the app downloads Python for the browser
 
 ## 5. Using the simulator
 
-- **Examples** (Program section): the 8 class projects. Picking one opens it in the
-  editor and runs it.
+- **Examples** (Program section): ten short, commented example programs, from
+  *Hello Arm* to *Speed Demo*. Picking one opens it in the editor and runs it on the
+  default scene (press **N** first if you have moved the cubes):
+
+  | Example | What it shows |
+  | --- | --- |
+  | 01 Hello Arm | print to the Brain screen, Safe Position, a few Tile squares, `get_x/y/z` |
+  | 02 Move Relative | `move_inc` in X, Y and Z, with prints |
+  | 03 Pen Square | the pen tool: a square and a triangle on the Tile |
+  | 04 Pick and Place Basics | magnet pick, approach / retreat heights, release |
+  | 05 Stack Cubes | the red cube onto the blue cube |
+  | 06 Loops and Lists | visit a list of squares in a `for` loop |
+  | 07 Functions | `go_above` / `pick` / `place` helpers, objects moved and put back |
+  | 08 Signal Tower | lamp colours, blinking, and the tower button (B) via `pressed` |
+  | 09 Reach Check | `can_arm_reach_to` before moving; skipped points are printed |
+  | 10 Speed Demo | `set_speed` 20 / 100 / 50 % with timings from the Brain timer |
 - **Load…** / **L**: open a `.ctepython` or `.py` file from your computer (or drop a
   file onto the 3D view). **Code** / **E** shows the editor; **Run** / **F5** runs it.
 - **Save** (Ctrl+S) downloads the code in the file's own format; **Export** downloads
-  a VEXcode CTE `.ctepython` you can open in VEXcode. Opening a class file and exporting
+  a VEXcode CTE `.ctepython` you can open in VEXcode. Opening a VEXcode file and exporting
   it again gives a byte-for-byte identical file.
 - **Pause** (Space), **Step line** (F10), **Step move** (F11), **Stop** (Esc),
   **Sim speed** 0.5× … 10× (`[` `]`).
@@ -159,7 +173,9 @@ The first time someone presses **Run**, the app downloads Python for the browser
 ### Adding your own bundled models / examples
 
 - Put `.stl` / `.3mf` files in `models/` and add a line for each in `models/index.json`.
-- Put `.ctepython` files in `examples/` and list them in `examples/index.json`.
+- Put `.ctepython` files in `examples/` and list them in `examples/index.json` (`file`,
+  `name` and a one-line `info`). The bundled ones all end with the VEXcode
+  `def main(): ... cte_thread(main)` pattern.
 
 ## 6. How it works (for the curious)
 
@@ -179,7 +195,7 @@ The first time someone presses **Run**, the app downloads Python for the browser
   calls are awaited, and a small hook runs before every line. That hook also gives the
   line highlight, Pause, Step and Stop. Threads (`cte_thread`, `Thread`, `Event`) are
   asyncio tasks. This works on any static host with no special headers.
-- **Known limits of that approach** (none of the class projects hit them): a student
+- **Known limits of that approach** (none of the bundled examples hit them): a student
   function used as a callback by Python itself (e.g. `sorted(..., key=my_function)`)
   or arm commands inside `__init__` / `@property` / lambdas / generators don't work
   (the app explains this in the error message). Generator expressions such as
@@ -216,9 +232,8 @@ is tagged in `js/arm_config.js` with its source.
 | Safe position | (120, 0, 100) | real | same |
 | Joint limits, speeds | see `arm_config.js` | estimates | same |
 
-Consequences for the class projects: all 8 examples still run and end where they did;
-the furthest they reach (150, 150) at the Tile is 212 mm from the base, well inside the
-envelope. The overall reach barely changed (tool pointing down: about 328 mm instead of 335;
+Consequences for programs: the bundled examples all run to the end; the furthest they
+reach (200, 150) at the Tile is 250 mm from the base, well inside the envelope. The overall reach barely changed (tool pointing down: about 328 mm instead of 335;
 stretched out: about 375 instead of 385), what changed is the shape - a lower shoulder, a
 shorter upper arm and a longer, offset forearm - so joint angles for a given point and
 the collision silhouette now follow the real arm. Location 36 (200, 200, 0) is reachable
@@ -231,13 +246,13 @@ tool-down, as in VEX's lesson picture, and the whole Tile is green on the reach 
   (`tests/bodies.test.mjs`); kinematics, IK, reach map and collision results compared with
   `tests/kinematics_fixtures.json` (a regression snapshot made by `node tests/gen_fixtures.mjs`;
   regenerate it when `js/arm_config.js` changes), the byte-identical `.ctepython` export
-  round trip for the 8 examples, and the model file readers (binary / ASCII STL, 3MF with the
+  round trip for every bundled example plus a synthetic VEXcode file, and the model file readers (binary / ASCII STL, 3MF with the
   production extension, file-type detection, auto scaling). Needs Node 20+.
 - `python tests/check_fk_fixtures.py` - recomputes the forward kinematics of every fixture
   pose in plain Python (no shared code with the JavaScript) and checks VEX's lesson pose.
 - `python tests/test_simrt.py` - the Python program runner (`python/simrt.py`) in normal
-  CPython: the 8 examples, Stop, errors with line numbers, threads, wait().
-- `tests/e2e_browser.mjs` - Playwright browser test (UI, all 8 samples, export, models,
+  CPython: the bundled examples, Stop, errors with line numbers, threads, wait().
+- `tests/e2e_browser.mjs` - Playwright browser test (UI, every bundled example, export, models,
   scenes, the move / rotate gizmo, position and rotation editor, keyboard nudges, stacking,
   overlaps, mesh collisions, the magnet with models, undo / redo, layout). See the comment at the top of
   the file for how to run it.

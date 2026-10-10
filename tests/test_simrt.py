@@ -16,11 +16,13 @@ sys.path.insert(0, os.path.join(SITE, "python"))
 import simrt  # noqa: E402
 
 msgs = []
+calls = []
 pos = [120.0, 0.0, 100.0]
 
 
 async def fake_call(name, args):
     kind, values = json.loads(args)[:2]
+    calls.append(kind)
     await asyncio.sleep(0)
     if kind in ("move_to", "move_inc"):
         x, y, z = values[:3]
@@ -32,6 +34,12 @@ async def fake_call(name, args):
         return "true"
     if kind == "get":
         return json.dumps({"x": round(pos[0], 2), "y": round(pos[1], 2), "z": round(pos[2], 2)}.get(values[0], 0))
+    if kind == "can_reach":                      # a rough reach test like the real arm's (base at the origin)
+        mode, v = values[:2]
+        if mode in ("to", "inc"):
+            x, y, z = (v if mode == "to" else [pos[0] + v[0], pos[1] + v[1], pos[2] + v[2]])
+            return "true" if (x * x + y * y) ** 0.5 <= 330 and 0 <= z <= 350 and (x * x + y * y + (z - 84) ** 2) ** 0.5 <= 360 else "false"
+        return "true"
     return "true" if kind.startswith("can_") or kind.startswith("is_") else "null"
 
 
@@ -42,6 +50,7 @@ simrt.BRIDGE.call = fake_call
 
 def run(src, name="test", stop_after=None):
     msgs.clear()
+    calls.clear()
     pos[:] = [120.0, 0.0, 100.0]
 
     async def go():
@@ -63,9 +72,13 @@ def error():
 
 
 class SimRuntime(unittest.TestCase):
-    def test_class_examples(self):
+    def test_bundled_examples(self):
+        """Every example in examples/ runs to the end on the fake bridge, finishes at the
+        Safe Position and makes the number of arm moves recorded in expected_sample_results.json."""
         with open(os.path.join(HERE, "expected_sample_results.json"), encoding="utf-8") as fh:
             expected = json.load(fh)
+        files = sorted(f for f in os.listdir(os.path.join(SITE, "examples")) if f.endswith(".ctepython"))
+        self.assertEqual(files, sorted(expected), "expected_sample_results.json must list exactly the bundled examples")
         for f, exp in expected.items():
             with open(os.path.join(SITE, "examples", f), encoding="utf-8") as fh:
                 src = json.load(fh)["textContent"]
@@ -73,6 +86,8 @@ class SimRuntime(unittest.TestCase):
                 self.assertEqual(run(src, f), "finished", error())
                 for a, b in zip(pos, exp["position"]):
                     self.assertAlmostEqual(a, b, delta=0.01)
+                self.assertEqual(calls.count("move_to") + calls.count("move_inc"), exp["moves"], "number of arm moves")
+                self.assertFalse([m for m in msgs if m["type"] == "screen" and "can't be reached" in str(m.get("args"))], "unreachable move")
 
     def test_stop_infinite_loop(self):
         self.assertEqual(run("x = 0\nwhile True:\n    x += 1\n", stop_after=0.3), "stopped")

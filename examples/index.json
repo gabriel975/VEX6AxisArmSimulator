@@ -1,44 +1,55 @@
 {
+ "about": "Example programs shown in the Examples menu. Each is a VEXcode CTE 4.67 text project (.ctepython).",
  "examples": [
   {
-   "file": "1.1.4 Hopscotch.ctepython",
-   "name": "1.1.4 Hopscotch",
-   "info": "magnet + threads"
+   "file": "01 Hello Arm.ctepython",
+   "name": "Hello Arm",
+   "info": "the smallest useful program"
   },
   {
-   "file": "1.1.5 Marker.ctepython",
-   "name": "1.1.5 Marker",
-   "info": "magnet + threads"
+   "file": "02 Move Relative.ctepython",
+   "name": "Move Relative",
+   "info": "move_inc() moves BY an amount, move_to() moves TO a point"
   },
   {
-   "file": "1.1.6 Initials.ctepython",
-   "name": "1.1.6 Initials",
-   "info": "pen + threads"
+   "file": "03 Pen Square.ctepython",
+   "name": "Pen Square",
+   "info": "draw with the Pen Holder Tool"
   },
   {
-   "file": "1.2.3.ctepython",
-   "name": "1.2.3",
-   "info": "magnet"
+   "file": "04 Pick and Place Basics.ctepython",
+   "name": "Pick and Place Basics",
+   "info": "carry the red cube to another square with the magnet"
   },
   {
-   "file": "1.3.1.ctepython",
-   "name": "1.3.1",
-   "info": "magnet + threads"
+   "file": "05 Stack Cubes.ctepython",
+   "name": "Stack Cubes",
+   "info": "put the red cube on top of the blue cube"
   },
   {
-   "file": "CubesTemplate.ctepython",
-   "name": "CubesTemplate",
-   "info": "magnet"
+   "file": "06 Loops and Lists.ctepython",
+   "name": "Loops and Lists",
+   "info": "visit a list of Tile squares with a for loop"
   },
   {
-   "file": "Pallet.ctepython",
-   "name": "Pallet",
-   "info": "magnet"
+   "file": "07 Functions.ctepython",
+   "name": "Functions",
+   "info": "reusable helpers for picking and placing"
   },
   {
-   "file": "PickAndPlace.ctepython",
-   "name": "PickAndPlace",
-   "info": "magnet + threads"
+   "file": "08 Signal Tower.ctepython",
+   "name": "Signal Tower",
+   "info": "lights and the button"
+  },
+  {
+   "file": "09 Reach Check.ctepython",
+   "name": "Reach Check",
+   "info": "ask before you move"
+  },
+  {
+   "file": "10 Speed Demo.ctepython",
+   "name": "Speed Demo",
+   "info": "the same move at different speeds"
   }
  ]
 }

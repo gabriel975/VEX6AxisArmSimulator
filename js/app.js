@@ -1467,6 +1467,7 @@ class App {
     if (fresh.length) {
       const msg = collision.describe(hits.filter((x) => fresh.includes(key(x))), selfh.filter((x) => fresh.includes(key(x))));
       if (msg) {
+        (this.collisionLog = this.collisionLog || []).push(msg);          // tests read this
         if (program && this.stopOnCollision.program) { c.stop(); this.host.stop(); this.toast("Program stopped - collision: " + msg, true); }
         else this.toast("Collision: " + msg, true);
       }

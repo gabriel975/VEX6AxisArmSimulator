@@ -119,42 +119,76 @@ await check("help (F1) opens and closes", async () => {
   assert(!(await page.locator("#help").isVisible()), "help still open");
 });
 
-await check("all 8 class samples run to completion via the Examples menu (10x)", async () => {
+await check("Examples menu lists the bundled examples with titles and descriptions", async () => {
+  const index = JSON.parse(fs.readFileSync(path.join(SITE, "examples/index.json"), "utf8")).examples;
+  const opts = await page.$$eval("#examples option", (els) => els.slice(1).map((o) => [o.value, o.textContent]));
+  assert(opts.length === index.length && opts.length >= 10, `${opts.length} options`);
+  for (const [i, e] of index.entries()) assert(opts[i][0] === e.file && opts[i][1] === `${e.name}  (${e.info})`, `option ${i}: ${opts[i]}`);
+  assert(!opts.some(([v]) => /Hopscotch|Marker|Initials|1\.2\.3|1\.3\.1|CubesTemplate|PickAndPlace|^Pallet/.test(v)), "old class files still listed");
+  return opts.map(([, t]) => t.split("  (")[0]).join(", ");
+});
+
+await check("every bundled example runs to completion on the default scene (10x): no unreachable moves, no collisions", async () => {
   await page.locator('#sim-seg [data-arg="10"]').click();
   const out = [];
   for (const [file, exp] of Object.entries(expected)) {
+    await page.evaluate(() => { app.clearObjects(); app.resetObjects(); app.collisionLog = []; if (app.c.magnetOn) app.c.setMagnet(false); app.setTool("MAGNET"); app.c.speedPercent = 50; });
     const rc = await page.evaluate(() => app.host.runCount || 0);
     await page.selectOption("#examples", file);
     await page.waitForFunction((n) => app.host.runCount > n, rc, { timeout: 60000 });
     await waitIdle(page, 180000);
-    const r = await page.evaluate(() => ({ state: app.host.state, err: app.host.error, pos: app.c.position(), tool: app.c.toolType, moves: app.host.moveLog.length }));
+    const r = await page.evaluate(() => ({ state: app.host.state, err: app.host.error, pos: app.c.position(), tool: app.c.toolType, moves: app.host.moveLog.length,
+      failed: app.host.moveLog.filter((m) => !m[2]).map((m) => m.slice(0, 2).join(" ")), collisions: app.collisionLog || [], notes: app.host.screen.notes.filter((n) => /ERROR|can't/.test(n)) }));
     const d = Math.hypot(...r.pos.map((v, i) => v - exp.position[i]));
     out.push(`${file.replace(".ctepython", "")}: ${r.state}, ${d.toFixed(3)} mm, ${r.moves} moves`);
     assert(r.state === "finished", `${file}: ${r.state} ${r.err}`);
     assert(d < 1.0, `${file}: final position ${r.pos} vs ${exp.position}`);
     assert(r.moves === exp.moves, `${file}: ${r.moves} moves vs ${exp.moves}`);
     assert(r.tool === exp.tool, `${file}: tool ${r.tool} vs ${exp.tool}`);
+    assert(r.failed.length === 0 && r.notes.length === 0, `${file}: failed moves ${r.failed.join("; ")} ${r.notes.join("; ")}`);
+    assert(r.collisions.length === 0, `${file}: collisions ${r.collisions.join("; ")}`);
     const slug = file.replace(/\.ctepython$/, "").replace(/[^A-Za-z0-9]+/g, "_");
-    if (["1_1_4_Hopscotch", "1_1_6_Initials", "1_3_1"].includes(slug)) await shot(page, `05_sample_${slug}.png`);
+    if (/Pen_Square|Stack_Cubes|Functions/.test(slug)) await shot(page, `05_example_${slug}.png`);
   }
+  // Stack Cubes really stacked them, Pick and Place really moved the red cube
+  const stacked = await page.evaluate(() => { app.clearObjects(); app.resetObjects(); return app.c.objects.map((o) => o.name + "@" + o.pos.map(Math.round)); });
+  assert(stacked.join(" ") === "Red cube@150,50,0 Blue cube@150,150,0 Green disk@50,200,0", "scene reset: " + stacked);
   assert(page.errors.length === 0, page.errors.join(" | "));
   return "\n    " + out.join("\n    ");
 });
 
-await check("pen drawing exists after Initials and Clear drawing removes it", async () => {
+await check("Stack Cubes leaves the red cube on the blue cube; Pick and Place moves it to square 33", async () => {
+  const runFile = async (f) => {
+    await page.evaluate(() => { app.clearObjects(); app.resetObjects(); });
+    const rc = await page.evaluate(() => app.host.runCount || 0);
+    await page.selectOption("#examples", f);
+    await page.waitForFunction((n) => app.host.runCount > n, rc, { timeout: 30000 });
+    await waitIdle(page);
+    return page.evaluate(() => Object.fromEntries(app.c.objects.map((o) => [o.name, o.pos.map(Math.round)])));
+  };
+  const a = await runFile("05 Stack Cubes.ctepython");
+  assert(a["Red cube"].join(",") === "150,150,25" && a["Blue cube"].join(",") === "150,150,0", "stack: " + JSON.stringify(a));
+  const b = await runFile("04 Pick and Place Basics.ctepython");
+  assert(b["Red cube"].join(",") === "200,50,0", "pick and place: " + JSON.stringify(b));
+  return `stacked at ${a["Red cube"]}, placed at ${b["Red cube"]}`;
+});
+
+await check("Pen Square draws (pen trail) and Clear drawing removes it", async () => {
+  await page.evaluate(() => { app.clearObjects(); app.resetObjects(); app.clearDrawing(); });
   const rc = await page.evaluate(() => app.host.runCount || 0);
-  await page.selectOption("#examples", "1.1.6 Initials.ctepython");
+  await page.selectOption("#examples", "03 Pen Square.ctepython");
   await page.waitForFunction((n) => app.host.runCount > n, rc, { timeout: 30000 });
   await waitIdle(page);
-  const n = await page.evaluate(() => app.trail.filter(Boolean).length);
-  assert(n > 50, "pen trail points " + n);
+  const r = await page.evaluate(() => ({ n: app.trail.filter(Boolean).length, strokes: app.strokes() }));
+  assert(r.n > 50 && r.strokes === 2, "pen trail " + JSON.stringify(r));
   await page.locator("#btn-clear-drawing").click();
   const n2 = await page.evaluate(() => app.trail.filter(Boolean).length);
   assert(n2 === 0, "trail not cleared");
-  return `${n} pen points`;
+  await page.evaluate(() => app.setTool("MAGNET"));
+  return `${r.n} pen points in ${r.strokes} strokes (square + triangle)`;
 });
 
-await check("export is byte-identical for all 8 samples (UI Export button + exportData)", async () => {
+await check("export is byte-identical for every bundled example (UI Export button + Save)", async () => {
   await page.evaluate(() => app.toggleEditor(true));
   for (const file of Object.keys(expected)) {
     await page.evaluate((f) => app.openExample(f, { run: false }), file);
@@ -167,6 +201,7 @@ await check("export is byte-identical for all 8 samples (UI Export button + expo
     assert(Buffer.from(saveText, "utf8").equals(orig), `${file}: Save differs`);
   }
   await shot(page, "06_editor_open.png");
+  return `${Object.keys(expected).length} files`;
 });
 
 await check("load a project from the computer (file input) and run it", async () => {
@@ -875,7 +910,7 @@ for (const [label, vp, file] of [["phone 390x844", { width: 390, height: 844 }, 
 // --------------------------------------------------------------- Pyodide blocked
 await check("friendly message when the Python CDN is blocked", async () => {
   const p = await openPage(undefined, (ctx) => ctx.route(/cdn\.jsdelivr\.net/, (r) => r.abort()));
-  await p.evaluate(() => app.openExample("1.1.5 Marker.ctepython"));
+  await p.evaluate(() => app.openExample("01 Hello Arm.ctepython"));
   await p.waitForSelector("#py-banner:not([hidden])", { timeout: 30000 });
   await p.waitForFunction(() => app.host.pyStatus === "error", null, { timeout: 30000 });
   const t = await p.locator("#py-banner").innerText();

@@ -1,16 +1,89 @@
 {
- "1.1.4 Hopscotch.ctepython": {
+ "01 Hello Arm.ctepython": {
   "state": "finished",
   "position": [
-   119.999,
+   120.0,
    0.0,
-   100.001
+   100.0
   ],
   "tool": "MAGNET",
-  "moves": 16,
-  "failed_moves": 0
+  "moves": 5,
+  "failed_moves": 0,
+  "collisions": 0
  },
- "1.1.5 Marker.ctepython": {
+ "02 Move Relative.ctepython": {
+  "state": "finished",
+  "position": [
+   120.0,
+   0.0,
+   100.0
+  ],
+  "tool": "MAGNET",
+  "moves": 9,
+  "failed_moves": 0,
+  "collisions": 0
+ },
+ "03 Pen Square.ctepython": {
+  "state": "finished",
+  "position": [
+   120.0,
+   0.0,
+   100.0
+  ],
+  "tool": "PEN",
+  "moves": 15,
+  "failed_moves": 0,
+  "collisions": 0
+ },
+ "04 Pick and Place Basics.ctepython": {
+  "state": "finished",
+  "position": [
+   120.0,
+   0.0,
+   100.0
+  ],
+  "tool": "MAGNET",
+  "moves": 8,
+  "failed_moves": 0,
+  "collisions": 0
+ },
+ "05 Stack Cubes.ctepython": {
+  "state": "finished",
+  "position": [
+   120.0,
+   0.0,
+   100.0
+  ],
+  "tool": "MAGNET",
+  "moves": 8,
+  "failed_moves": 0,
+  "collisions": 0
+ },
+ "06 Loops and Lists.ctepython": {
+  "state": "finished",
+  "position": [
+   120.0,
+   0.0,
+   100.0
+  ],
+  "tool": "MAGNET",
+  "moves": 14,
+  "failed_moves": 0,
+  "collisions": 0
+ },
+ "07 Functions.ctepython": {
+  "state": "finished",
+  "position": [
+   120.0,
+   0.0,
+   100.0
+  ],
+  "tool": "MAGNET",
+  "moves": 26,
+  "failed_moves": 0,
+  "collisions": 0
+ },
+ "08 Signal Tower.ctepython": {
   "state": "finished",
   "position": [
    120.0,
@@ -19,72 +92,31 @@
   ],
   "tool": "MAGNET",
   "moves": 4,
-  "failed_moves": 0
+  "failed_moves": 0,
+  "collisions": 0
  },
- "1.1.6 Initials.ctepython": {
+ "09 Reach Check.ctepython": {
   "state": "finished",
   "position": [
    120.0,
-   -0.0,
+   0.0,
    100.0
   ],
-  "tool": "PEN",
-  "moves": 19,
-  "failed_moves": 0
- },
- "1.2.3.ctepython": {
-  "state": "finished",
-  "position": [
-   175.0,
-   115.0,
-   45.0
-  ],
   "tool": "MAGNET",
-  "moves": 6,
-  "failed_moves": 0
+  "moves": 5,
+  "failed_moves": 0,
+  "collisions": 0
  },
- "1.3.1.ctepython": {
+ "10 Speed Demo.ctepython": {
   "state": "finished",
   "position": [
-   200.0,
-   50.0,
-   55.0
-  ],
-  "tool": "MAGNET",
-  "moves": 55,
-  "failed_moves": 0
- },
- "CubesTemplate.ctepython": {
-  "state": "finished",
-  "position": [
-   175.0,
-   175.0,
-   45.0
-  ],
-  "tool": "MAGNET",
-  "moves": 9,
-  "failed_moves": 0
- },
- "Pallet.ctepython": {
-  "state": "finished",
-  "position": [
-   112.0,
-   112.0,
-   45.0
-  ],
-  "tool": "MAGNET",
-  "moves": 1,
-  "failed_moves": 0
- },
- "PickAndPlace.ctepython": {
-  "state": "finished",
-  "position": [
-   119.999,
+   120.0,
    0.0,
-   100.001
+   100.0
   ],
   "tool": "MAGNET",
-  "moves": 16,
-  "failed_moves": 0
+  "moves": 11,
+  "failed_moves": 0,
+  "collisions": 0
  }
 }
